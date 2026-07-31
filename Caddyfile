@@ -1,0 +1,24 @@
+# Origin for the auction-demo.bunsenbrenner.org demo. Caddy terminates TLS, so it
+# needs NO inbound :80/:443 of its own (the origin is only reachable through the
+# tunnel). The agent (Browser Plane) forwards the raw TLS to this Caddy; TLS
+# terminates here, at the origin, keeping the edge/plane payload-blind.
+#
+# Unlike flappy-demo/cookbook-demo (static index.html + Caddy file_server, with only
+# the build endpoint proxied), the auction-demo-bridge IS the whole web server here
+# -- it serves the dashboard AND the live /events stream itself -- so Caddy's only
+# job is TLS termination + reverse-proxying everything to it. Streaming responses
+# (SSE) pass through reverse_proxy unmodified; no special config needed.
+#
+# The cert is issued CORE-side (CADS-Tunnel's scripts/authorize-pipeline.sh, deSEC
+# DNS-01 with the operator's zone-wide token) and mounted in as static files -- this
+# Caddyfile only ever reads fullchain.pem/privkey.pem, never holds a DNS credential.
+
+auction-demo.bunsenbrenner.org {
+	reverse_proxy auction-demo-bridge:8789
+	encode gzip
+	tls /certs/fullchain.pem /certs/privkey.pem
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+	}
+}

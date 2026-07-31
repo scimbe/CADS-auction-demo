@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CADS-auction-demo — live workflow-pipeline auction</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #151b23;
+    --panel-border: #232b36;
+    --text: #e6edf3;
+    --muted: #8b96a5;
+    --accent: #4fd1c5;
+    --accent-dim: #245952;
+    --win: #4fd17a;
+    --danger: #e5534b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  header {
+    padding: 2rem 1.25rem 1rem;
+    max-width: 920px;
+    margin: 0 auto;
+  }
+  h1 { font-size: 1.5rem; margin: 0 0 0.4rem; }
+  .sub { color: var(--muted); font-size: 0.95rem; max-width: 60ch; }
+  .honesty {
+    margin-top: 0.9rem;
+    padding: 0.75rem 1rem;
+    background: #1a2230;
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    font-size: 0.87rem;
+    color: var(--muted);
+  }
+  .honesty b { color: var(--text); }
+  main { max-width: 920px; margin: 0 auto; padding: 0 1.25rem 3rem; }
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    align-items: center;
+    margin: 1.25rem 0;
+  }
+  .policy-group { display: flex; gap: 0.4rem; background: var(--panel); border: 1px solid var(--panel-border); border-radius: 8px; padding: 0.25rem; }
+  .policy-btn, .action-btn {
+    font: inherit;
+    border: 0;
+    border-radius: 6px;
+    padding: 0.5rem 0.9rem;
+    cursor: pointer;
+    background: transparent;
+    color: var(--muted);
+  }
+  .policy-btn.active { background: var(--accent-dim); color: var(--text); }
+  .action-btn.primary { background: var(--accent); color: #04211d; font-weight: 600; }
+  .action-btn.primary:hover { filter: brightness(1.08); }
+  .action-btn.ghost { border: 1px solid var(--panel-border); color: var(--muted); }
+  .status { font-size: 0.85rem; color: var(--muted); min-height: 1.2em; }
+  .roles { display: grid; grid-template-columns: 1fr; gap: 1rem; }
+  @media (min-width: 720px) { .roles { grid-template-columns: 1fr 1fr; } }
+  .role-panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 1rem 1.1rem;
+    min-height: 220px;
+  }
+  .role-panel h2 { margin: 0 0 0.15rem; font-size: 1.05rem; }
+  .role-panel .role-meta { color: var(--muted); font-size: 0.82rem; margin-bottom: 0.75rem; }
+  .bid-list { display: flex; flex-direction: column; gap: 0.4rem; }
+  .bid {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.45rem 0.65rem;
+    border-radius: 6px;
+    background: #0f151d;
+    border: 1px solid var(--panel-border);
+    font-size: 0.9rem;
+    opacity: 0;
+    transform: translateY(4px);
+    animation: appear 0.25s ease forwards;
+  }
+  @keyframes appear { to { opacity: 1; transform: none; } }
+  .bid.win { border-color: var(--win); background: #10241a; }
+  .bid .who { font-weight: 600; }
+  .bid .terms { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .bid.win .who::after { content: " — winner"; color: var(--win); font-weight: 500; }
+  .empty-hint { color: var(--muted); font-size: 0.85rem; }
+  footer { max-width: 920px; margin: 0 auto; padding: 1rem 1.25rem 3rem; color: var(--muted); font-size: 0.8rem; }
+  a { color: var(--accent); }
+  code { background: #1a2230; padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.85em; }
+
+  .editor-toggle { margin: 0.25rem 0 1rem; }
+  .editor {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 1rem 1.1rem;
+    margin-bottom: 1rem;
+  }
+  .editor h2 { margin: 0 0 0.25rem; font-size: 1.05rem; }
+  .editor .editor-sub { color: var(--muted); font-size: 0.85rem; margin-bottom: 0.9rem; }
+  .editor-role-block + .editor-role-block { margin-top: 1rem; }
+  .editor-role-block h3 { margin: 0 0 0.5rem; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+  .provider-row { display: grid; grid-template-columns: 1.4fr 0.8fr 0.8fr auto; gap: 0.4rem; align-items: center; margin-bottom: 0.4rem; }
+  .provider-row input {
+    font: inherit;
+    background: #0f151d;
+    border: 1px solid var(--panel-border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 0.4rem 0.55rem;
+    width: 100%;
+  }
+  .provider-row .remove-btn {
+    background: transparent;
+    border: 1px solid var(--panel-border);
+    color: var(--danger);
+    border-radius: 6px;
+    width: 1.9rem;
+    height: 1.9rem;
+    cursor: pointer;
+  }
+  .add-row-btn {
+    font: inherit;
+    background: transparent;
+    border: 1px dashed var(--panel-border);
+    color: var(--muted);
+    border-radius: 6px;
+    padding: 0.35rem 0.7rem;
+    cursor: pointer;
+    margin-top: 0.15rem;
+  }
+  .add-row-btn:hover { color: var(--text); border-color: var(--accent-dim); }
+  .editor-actions { margin-top: 1rem; display: flex; gap: 0.6rem; align-items: center; }
+  .field-labels { display: grid; grid-template-columns: 1.4fr 0.8fr 0.8fr auto; gap: 0.4rem; font-size: 0.72rem; color: var(--muted); margin-bottom: 0.3rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Live workflow-pipeline auction</h1>
+  <div class="sub">
+    Watching <code>ct_common::pipeline::PipelineSpec::auction_view</code> — CADS-Tunnel's real,
+    tested per-role clearing algorithm — run live in the browser.
+  </div>
+  <div class="honesty">
+    <b>What's real:</b> the auction algorithm, and — below — genuinely your own input. Edit any
+    price/units or add a bidder and the bridge re-signs it as a real
+    <code>ct_common::channel::CapacityOffer</code> before running the actual
+    <code>convene_with_policy</code>/<code>auction_view</code> clear on it; your numbers really
+    decide the winner. <b>What's simulated:</b> "online" here just means "listed in the editor
+    below" — a real deployment discovers offers from <code>/registry/agents</code> instead of a
+    form. Each bid also appears with a short deliberate pause so you can watch it happen; the real
+    computation itself is effectively instant.
+  </div>
+</header>
+<main>
+  <div class="editor">
+    <h2>Configure the bidders</h2>
+    <div class="editor-sub">
+      This is your real input — edit any price/units, or add your own bidder, then apply.
+      The bridge re-signs each one as a real <code>ct_common::channel::CapacityOffer</code>
+      with your numbers before the auction ever runs; nothing here is cosmetic.
+    </div>
+    <div class="editor-role-block" data-role="reviewer">
+      <h3>reviewer (SecurityReview)</h3>
+      <div class="field-labels"><span>name</span><span>units</span><span>price</span><span></span></div>
+      <div class="provider-rows" id="rows-reviewer"></div>
+      <button class="add-row-btn" data-add-role="reviewer">+ add bidder</button>
+    </div>
+    <div class="editor-role-block" data-role="writer">
+      <h3>writer (TextGeneration)</h3>
+      <div class="field-labels"><span>name</span><span>units</span><span>price</span><span></span></div>
+      <div class="provider-rows" id="rows-writer"></div>
+      <button class="add-row-btn" data-add-role="writer">+ add bidder</button>
+    </div>
+    <div class="editor-actions">
+      <button class="action-btn primary" id="apply-btn">Apply & run</button>
+      <button class="action-btn ghost" id="revert-btn">Revert to defaults</button>
+    </div>
+  </div>
+  <div class="controls">
+    <div class="policy-group" id="policy-group">
+      <button class="policy-btn active" data-policy="lowest_floor">Lowest Floor</button>
+      <button class="policy-btn" data-policy="round_robin">Round Robin</button>
+      <button class="policy-btn" data-policy="least_calls">Least Calls</button>
+    </div>
+    <button class="action-btn primary" id="run-btn">Run auction round</button>
+    <button class="action-btn ghost" id="reset-btn">Reset state</button>
+  </div>
+  <div class="status" id="status"></div>
+  <div class="roles">
+    <section class="role-panel" data-role="reviewer">
+      <h2>reviewer</h2>
+      <div class="role-meta">requires SecurityReview, 10 units</div>
+      <div class="bid-list" id="bids-reviewer"><div class="empty-hint">No round run yet.</div></div>
+    </section>
+    <section class="role-panel" data-role="writer">
+      <h2>writer</h2>
+      <div class="role-meta">requires TextGeneration, 20 units</div>
+      <div class="bid-list" id="bids-writer"><div class="empty-hint">No round run yet.</div></div>
+    </section>
+  </div>
+</main>
+<footer>
+  Source: <a href="https://github.com/scimbe/CADS-auction-demo">scimbe/CADS-auction-demo</a>.
+  Auction primitive lives in <a href="https://github.com/scimbe/CADS-Tunnel">scimbe/CADS-Tunnel</a>
+  (<code>crates/common/src/pipeline.rs</code>).
+</footer>
+<script>
+(() => {
+  const statusEl = document.getElementById("status");
+  const policyGroup = document.getElementById("policy-group");
+  let policy = "lowest_floor";
+
+  policyGroup.addEventListener("click", (e) => {
+    const btn = e.target.closest(".policy-btn");
+    if (!btn) return;
+    policy = btn.dataset.policy;
+    [...policyGroup.children].forEach((b) => b.classList.toggle("active", b === btn));
+  });
+
+  // --- bidder editor: real, user-controlled input, not just a policy pick -------
+  function addRow(role, who, units, price) {
+    const container = document.getElementById("rows-" + role);
+    const row = document.createElement("div");
+    row.className = "provider-row";
+    row.innerHTML = `
+      <input type="text" class="f-who" value="${who ?? ""}" placeholder="name" maxlength="40">
+      <input type="number" class="f-units" value="${units ?? 10}" min="1">
+      <input type="number" class="f-price" value="${price ?? 10}" min="0">
+      <button class="remove-btn" title="remove">×</button>`;
+    row.querySelector(".remove-btn").addEventListener("click", () => row.remove());
+    container.appendChild(row);
+  }
+
+  function renderEditor(providers) {
+    document.getElementById("rows-reviewer").innerHTML = "";
+    document.getElementById("rows-writer").innerHTML = "";
+    for (const p of providers) addRow(p.role, p.who, p.units, p.price);
+  }
+
+  document.querySelectorAll("[data-add-role]").forEach((btn) => {
+    btn.addEventListener("click", () => addRow(btn.dataset.addRole, "", 10, 10));
+  });
+
+  function collectProviders() {
+    const out = [];
+    for (const role of ["reviewer", "writer"]) {
+      document.querySelectorAll("#rows-" + role + " .provider-row").forEach((row) => {
+        const who = row.querySelector(".f-who").value.trim();
+        if (!who) return;
+        out.push({
+          role,
+          who,
+          units: Math.max(1, parseInt(row.querySelector(".f-units").value, 10) || 1),
+          price: Math.max(0, parseInt(row.querySelector(".f-price").value, 10) || 0),
+        });
+      });
+    }
+    return out;
+  }
+
+  document.getElementById("apply-btn").addEventListener("click", async () => {
+    const providers = collectProviders();
+    if (providers.length === 0) { statusEl.textContent = "add at least one bidder first"; return; }
+    statusEl.textContent = "applying your bidders…";
+    const resp = await fetch("/offers", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ providers }),
+    });
+    if (!resp.ok) { statusEl.textContent = "rejected: " + (await resp.text()); return; }
+    statusEl.textContent = "running…";
+    document.querySelectorAll(".role-panel .bid-list").forEach((el) => {
+      el.innerHTML = '<div class="empty-hint">Auctioning…</div>';
+    });
+    await fetch("/run?policy=" + encodeURIComponent(policy), { method: "POST" });
+  });
+
+  document.getElementById("revert-btn").addEventListener("click", async () => {
+    statusEl.textContent = "reverting to defaults…";
+    await fetch("/reset", { method: "POST" });
+  });
+
+  fetch("/offers").then((r) => r.json()).then(renderEditor).catch(() => {});
+
+  function clearPanel(role) {
+    const el = document.getElementById("bids-" + role);
+    el.innerHTML = "";
+  }
+
+  function addBid(role, who, units, price, win) {
+    const el = document.getElementById("bids-" + role);
+    const hint = el.querySelector(".empty-hint");
+    if (hint) hint.remove();
+    const row = document.createElement("div");
+    row.className = "bid" + (win ? " win" : "");
+    row.innerHTML = `<span class="who">${who}</span><span class="terms">${units}u @ ${price}</span>`;
+    el.appendChild(row);
+  }
+
+  function renderCleared(role, bids) {
+    clearPanel(role);
+    for (const b of bids) addBid(role, b.who, b.units, b.price, b.win);
+  }
+
+  document.getElementById("run-btn").addEventListener("click", async () => {
+    statusEl.textContent = "running…";
+    document.querySelectorAll(".role-panel .bid-list").forEach((el) => {
+      el.innerHTML = '<div class="empty-hint">Auctioning…</div>';
+    });
+    await fetch("/run?policy=" + encodeURIComponent(policy), { method: "POST" });
+  });
+
+  document.getElementById("reset-btn").addEventListener("click", async () => {
+    statusEl.textContent = "resetting round-robin / least-calls state…";
+    await fetch("/reset", { method: "POST" });
+  });
+
+  const es = new EventSource("/events");
+  es.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+    switch (msg.type) {
+      case "round_start":
+        statusEl.textContent = `round started (policy: ${msg.policy})`;
+        break;
+      case "bid":
+        statusEl.textContent = `bid seen: ${msg.who} (${msg.role})`;
+        break;
+      case "role_cleared":
+        renderCleared(msg.role, msg.bids);
+        statusEl.textContent = `${msg.role} cleared`;
+        break;
+      case "round_done":
+        statusEl.textContent = "round complete";
+        break;
+      case "round_error":
+        statusEl.textContent = "error: " + msg.message;
+        break;
+      case "reset":
+        statusEl.textContent = "reset to default bidders";
+        if (msg.providers) renderEditor(msg.providers);
+        document.querySelectorAll(".role-panel .bid-list").forEach((el) => {
+          el.innerHTML = '<div class="empty-hint">No round run yet.</div>';
+        });
+        break;
+      case "offers_updated":
+        // Another tab (or this one) applied a new bidder set — keep the editor in sync.
+        if (msg.providers) renderEditor(msg.providers);
+        break;
+    }
+  };
+  es.onerror = () => { statusEl.textContent = "reconnecting…"; };
+})();
+</script>
+</body>
+</html>
