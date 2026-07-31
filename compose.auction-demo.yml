@@ -22,6 +22,47 @@ services:
       - "8789:8789"   # only for the local-only smoke test above; the public path goes through Caddy/the agent
     restart: unless-stopped
 
+  # Six genuinely independent bidder processes -- each its own container, its own
+  # randomly-generated ed25519 identity, signing its own real CapacityOffer and
+  # submitting it to the bridge over the shared plane network. None of these share a
+  # process, a filesystem, or a private key with the bridge or with each other -- see
+  # src/bin/provider.rs and README's "What's real, what's simulated".
+  auction-demo-provider-aurora:
+    build: { context: ., dockerfile: Provider.Dockerfile }
+    environment: [PROVIDER_NAME=aurora, PROVIDER_ROLE=reviewer, PROVIDER_UNITS=15, PROVIDER_PRICE=60, "BRIDGE_URL=http://auction-demo-bridge:8789"]
+    depends_on: [auction-demo-bridge]
+    restart: unless-stopped
+
+  auction-demo-provider-borealis:
+    build: { context: ., dockerfile: Provider.Dockerfile }
+    environment: [PROVIDER_NAME=borealis, PROVIDER_ROLE=reviewer, PROVIDER_UNITS=12, PROVIDER_PRICE=45, "BRIDGE_URL=http://auction-demo-bridge:8789"]
+    depends_on: [auction-demo-bridge]
+    restart: unless-stopped
+
+  auction-demo-provider-cascade:
+    build: { context: ., dockerfile: Provider.Dockerfile }
+    environment: [PROVIDER_NAME=cascade, PROVIDER_ROLE=reviewer, PROVIDER_UNITS=20, PROVIDER_PRICE=55, "BRIDGE_URL=http://auction-demo-bridge:8789"]
+    depends_on: [auction-demo-bridge]
+    restart: unless-stopped
+
+  auction-demo-provider-delta:
+    build: { context: ., dockerfile: Provider.Dockerfile }
+    environment: [PROVIDER_NAME=delta, PROVIDER_ROLE=writer, PROVIDER_UNITS=25, PROVIDER_PRICE=30, "BRIDGE_URL=http://auction-demo-bridge:8789"]
+    depends_on: [auction-demo-bridge]
+    restart: unless-stopped
+
+  auction-demo-provider-echo:
+    build: { context: ., dockerfile: Provider.Dockerfile }
+    environment: [PROVIDER_NAME=echo, PROVIDER_ROLE=writer, PROVIDER_UNITS=30, PROVIDER_PRICE=38, "BRIDGE_URL=http://auction-demo-bridge:8789"]
+    depends_on: [auction-demo-bridge]
+    restart: unless-stopped
+
+  auction-demo-provider-foxtrot:
+    build: { context: ., dockerfile: Provider.Dockerfile }
+    environment: [PROVIDER_NAME=foxtrot, PROVIDER_ROLE=writer, PROVIDER_UNITS=28, PROVIDER_PRICE=22, "BRIDGE_URL=http://auction-demo-bridge:8789"]
+    depends_on: [auction-demo-bridge]
+    restart: unless-stopped
+
   auction-demo-origin:
     build:
       context: .

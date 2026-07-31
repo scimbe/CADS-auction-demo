@@ -1,11 +1,15 @@
 //! CADS-auction-demo bridge: a live web dashboard over CADS-Tunnel's REAL
 //! workflow-pipeline auction primitive (`ct_common::pipeline::PipelineSpec::auction_view`,
 //! `convene_with_policy`, `SelectionPolicy`) — not a hardcoded fixture like
-//! `crew_bridge.rs`'s `demo_auction()`. The offers start as clearly-labeled synthetic
-//! demo providers (see README), but every term (price, units, even adding/removing a
-//! bidder) is editable from the dashboard: `POST /offers` re-signs real
-//! `ct_common::channel::CapacityOffer`s with the caller's own numbers, so the visitor
-//! has genuine influence over the input, not just a choice of `SelectionPolicy`.
+//! `crew_bridge.rs`'s `demo_auction()`. The roster of bidders is real too: each named
+//! provider (`aurora`, `borealis`, ...) is its own genuinely independent OS process
+//! (`auction-demo-provider`, this repo's `src/bin/provider.rs`), holding its own real,
+//! randomly-generated ed25519 identity, signing its own real
+//! `ct_common::channel::CapacityOffer`, and submitting it to `POST /offers/submit` —
+//! which this bridge verifies (`CapacityOffer::is_valid`), never re-signs or trusts
+//! blind. The only thing a visitor can add on top is their own single bid via
+//! `POST /offers/mine`, clearly a visitor-supplied input (like typing a task), not a
+//! fabricated roster of competitors.
 
 use axum::extract::State;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -18,6 +22,7 @@ use ed25519_dalek::SigningKey;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -26,9 +31,9 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 
 const ROLES: &[&str] = &["reviewer", "writer"];
-/// Hard cap on bidders per role so a public-facing `/offers` can't be used to grow the
-/// bridge's memory or the auction display without bound.
-const MAX_OFFERS_PER_ROLE: usize = 8;
+/// Hard cap on bidders per role so a public-facing submit endpoint can't be used to
+/// grow the bridge's memory or the auction display without bound.
+const MAX_OFFERS_PER_ROLE: usize = 12;
 const MAX_NAME_LEN: usize = 40;
 
 fn service_for_role(role: &str) -> Option<ServiceType> {
@@ -51,78 +56,29 @@ fn demo_spec() -> PipelineSpec {
     }
 }
 
-/// One editable bidder: the terms a visitor can set, plus the resulting *really signed*
-/// offer. Re-derived whenever the terms change (`ProviderInput::sign`), never hand-built
-/// as a `CapacityOffer` fixture.
-#[derive(Clone, Deserialize)]
-struct ProviderInput {
+fn now_secs() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// A real, independently-signed offer the bridge has accepted: from a genuinely
+/// separate `auction-demo-provider` process (the normal case) or from a visitor's own
+/// `POST /offers/mine` bid. Either way `offer` is a real, already-verified
+/// `CapacityOffer` -- this struct never carries anything the bridge fabricated on
+/// someone else's behalf.
+#[derive(Clone)]
+struct SubmittedOffer {
+    display_name: String,
     role: String,
-    who: String,
-    units: u64,
-    price: u64,
-}
-
-impl ProviderInput {
-    /// Deterministic per-name identity: `sha256(who)` as the ed25519 seed, so re-signing
-    /// the same visitor-chosen name (e.g. after editing its price) keeps the same holder
-    /// key rather than minting a fresh stranger each time — and two different sessions
-    /// typing the same name get the same identity too, matching this codebase's own
-    /// fixed-seed demo-identity convention (`pipeline.rs`'s test `offer()`/`holder()`).
-    fn seed(&self) -> [u8; 32] {
-        let mut hasher = Sha256::new();
-        hasher.update(self.who.as_bytes());
-        hasher.finalize().into()
-    }
-
-    fn sign(&self, now: u64) -> Option<CapacityOffer> {
-        let service = service_for_role(&self.role)?;
-        let sk = SigningKey::from_bytes(&self.seed());
-        let far_future = now + 10 * 365 * 24 * 3600;
-        Some(CapacityOffer::sign_new_with_services(
-            &sk,
-            CapacityKind::CloudApiQuota,
-            vec!["claude".into()],
-            self.units,
-            self.price,
-            "demo-credits".into(),
-            now,
-            far_future,
-            vec![service],
-        ))
-    }
-}
-
-fn default_providers() -> Vec<ProviderInput> {
-    vec![
-        ProviderInput { role: "reviewer".into(), who: "aurora".into(), units: 15, price: 60 },
-        ProviderInput { role: "reviewer".into(), who: "borealis".into(), units: 12, price: 45 },
-        ProviderInput { role: "reviewer".into(), who: "cascade".into(), units: 20, price: 55 },
-        ProviderInput { role: "writer".into(), who: "delta".into(), units: 25, price: 30 },
-        ProviderInput { role: "writer".into(), who: "echo".into(), units: 30, price: 38 },
-        ProviderInput { role: "writer".into(), who: "foxtrot".into(), units: 28, price: 22 },
-    ]
-}
-
-/// Maps a signed offer's holder pubkey back to the display name the visitor gave it —
-/// derived straight from `ProviderInput::seed`, so it always agrees with what `sign()`
-/// actually produced.
-fn label_for(providers: &[ProviderInput]) -> impl Fn(&[u8; 32]) -> String {
-    let names: Vec<([u8; 32], String)> = providers
-        .iter()
-        .map(|p| (SigningKey::from_bytes(&p.seed()).verifying_key().to_bytes(), p.who.clone()))
-        .collect();
-    move |pk: &[u8; 32]| names.iter().find(|(k, _)| k == pk).map(|(_, n)| n.clone()).unwrap_or_else(|| "unknown".into())
+    offer: CapacityOffer,
 }
 
 struct BridgeState {
     spec: PipelineSpec,
-    providers: Mutex<Vec<ProviderInput>>,
+    /// Keyed by the offer's real holder pubkey so a provider's periodic re-submission
+    /// updates its own entry instead of accumulating duplicates.
+    offers: Mutex<HashMap<[u8; 32], SubmittedOffer>>,
     selection: Mutex<SelectionState>,
     tx: broadcast::Sender<String>,
-}
-
-fn now_secs() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 async fn broadcast_event(tx: &broadcast::Sender<String>, ev: Value) {
@@ -146,6 +102,22 @@ fn parse_policy(s: Option<&str>) -> SelectionPolicy {
     }
 }
 
+/// Snapshot the currently-valid offers (drops anything expired -- real time-bound
+/// state, not a fixture) and build the pubkey->display-name label the real
+/// `auction_view` needs.
+fn live_offers(st: &BridgeState, now: u64) -> (Vec<CapacityOffer>, HashMap<[u8; 32], String>) {
+    let map = st.offers.lock().unwrap_or_else(|e| e.into_inner());
+    let mut offers = Vec::new();
+    let mut labels = HashMap::new();
+    for entry in map.values() {
+        if entry.offer.is_valid(now) {
+            labels.insert(entry.offer.holder_pubkey, entry.display_name.clone());
+            offers.push(entry.offer.clone());
+        }
+    }
+    (offers, labels)
+}
+
 async fn run_handler(State(st): State<Arc<BridgeState>>, axum::extract::Query(q): axum::extract::Query<RunQuery>) -> impl IntoResponse {
     let policy = parse_policy(q.policy.as_deref());
     let policy_name = q.policy.unwrap_or_else(|| "lowest_floor".into());
@@ -153,13 +125,14 @@ async fn run_handler(State(st): State<Arc<BridgeState>>, axum::extract::Query(q)
     let st2 = st.clone();
     tokio::spawn(async move {
         broadcast_event(&tx, json!({"type": "round_start", "policy": policy_name})).await;
-        let providers = st2.providers.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        for p in &providers {
-            broadcast_event(&tx, json!({"type": "bid", "role": p.role, "who": p.who, "units": p.units, "price": p.price})).await;
-        }
         let now = now_secs();
-        let offers: Vec<CapacityOffer> = providers.iter().filter_map(|p| p.sign(now)).collect();
-        let label = label_for(&providers);
+        let (offers, labels) = live_offers(&st2, now);
+        for o in &offers {
+            let who = labels.get(&o.holder_pubkey).cloned().unwrap_or_else(|| "unknown".into());
+            let role = if o.services.contains(&ServiceType::SecurityReview) { "reviewer" } else { "writer" };
+            broadcast_event(&tx, json!({"type": "bid", "role": role, "who": who, "units": o.units_available, "price": o.min_price})).await;
+        }
+        let label = move |pk: &[u8; 32]| labels.get(pk).cloned().unwrap_or_else(|| "unknown".into());
         let result = {
             let mut state = st2.selection.lock().unwrap_or_else(|e| e.into_inner());
             st2.spec.auction_view(&offers, now, policy, &mut state, label)
@@ -183,57 +156,123 @@ async fn run_handler(State(st): State<Arc<BridgeState>>, axum::extract::Query(q)
     axum::http::StatusCode::ACCEPTED
 }
 
+/// Clears every currently-accepted offer. Real, independently-operated providers
+/// self-heal within their own resubmission interval (`SUBMIT_INTERVAL_SECS`, default
+/// 20s) -- this bridge never re-creates their bids on their behalf.
 async fn reset_handler(State(st): State<Arc<BridgeState>>) -> impl IntoResponse {
     *st.selection.lock().unwrap_or_else(|e| e.into_inner()) = SelectionState::default();
-    *st.providers.lock().unwrap_or_else(|e| e.into_inner()) = default_providers();
-    let _ = st.tx.send(json!({"type": "reset", "providers": default_providers().iter().map(|p| json!({"role": p.role, "who": p.who, "units": p.units, "price": p.price})).collect::<Vec<_>>()}).to_string());
+    st.offers.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    let _ = st.tx.send(json!({"type": "reset"}).to_string());
     axum::http::StatusCode::NO_CONTENT
 }
 
-/// A visitor's proposed bidder set for one role — real influence over the auction's
-/// input, not just a policy pick. Validated and re-signed, never trusted as-is.
-#[derive(Deserialize)]
-struct OffersReq {
-    providers: Vec<ProviderInput>,
-}
-
 async fn offers_get_handler(State(st): State<Arc<BridgeState>>) -> impl IntoResponse {
-    let providers = st.providers.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    Json(providers.iter().map(|p| json!({"role": p.role, "who": p.who, "units": p.units, "price": p.price})).collect::<Vec<_>>())
+    let now = now_secs();
+    let map = st.offers.lock().unwrap_or_else(|e| e.into_inner());
+    let list: Vec<Value> = map
+        .values()
+        .filter(|e| e.offer.is_valid(now))
+        .map(|e| json!({"role": e.role, "who": e.display_name, "units": e.offer.units_available, "price": e.offer.min_price}))
+        .collect();
+    Json(list)
 }
 
-async fn offers_post_handler(State(st): State<Arc<BridgeState>>, Json(req): Json<OffersReq>) -> impl IntoResponse {
-    if req.providers.is_empty() {
-        return (axum::http::StatusCode::BAD_REQUEST, "at least one provider required").into_response();
+/// A real, independently-signed offer from a genuinely separate provider process
+/// (`src/bin/provider.rs`) — verified here (`CapacityOffer::is_valid`), never
+/// re-signed or fabricated by this bridge.
+#[derive(Deserialize)]
+struct SubmitReq {
+    display_name: String,
+    role: String,
+    offer: CapacityOffer,
+}
+
+async fn offers_submit_handler(State(st): State<Arc<BridgeState>>, Json(req): Json<SubmitReq>) -> impl IntoResponse {
+    if !ROLES.contains(&req.role.as_str()) {
+        return (axum::http::StatusCode::BAD_REQUEST, format!("unknown role '{}' (must be one of {ROLES:?})", req.role)).into_response();
     }
-    for role in ROLES {
-        let count = req.providers.iter().filter(|p| &p.role == role).count();
-        if count > MAX_OFFERS_PER_ROLE {
-            return (axum::http::StatusCode::BAD_REQUEST, format!("at most {MAX_OFFERS_PER_ROLE} providers per role")).into_response();
+    let name = req.display_name.trim();
+    if name.is_empty() || name.len() > MAX_NAME_LEN {
+        return (axum::http::StatusCode::BAD_REQUEST, format!("display_name must be 1..={MAX_NAME_LEN} chars")).into_response();
+    }
+    let now = now_secs();
+    if !req.offer.is_valid(now) {
+        return (axum::http::StatusCode::UNAUTHORIZED, "offer signature does not verify (or is expired) -- rejected, not re-signed").into_response();
+    }
+    let Some(expected_service) = service_for_role(&req.role) else {
+        return (axum::http::StatusCode::BAD_REQUEST, "unreachable: role already validated").into_response();
+    };
+    if !req.offer.services.contains(&expected_service) {
+        return (axum::http::StatusCode::BAD_REQUEST, format!("offer's signed services don't include {expected_service:?} required for role '{}'", req.role)).into_response();
+    }
+    let mut map = st.offers.lock().unwrap_or_else(|e| e.into_inner());
+    let already_here = map.contains_key(&req.offer.holder_pubkey);
+    if !already_here {
+        let count = map.values().filter(|e| e.role == req.role).count();
+        if count >= MAX_OFFERS_PER_ROLE {
+            return (axum::http::StatusCode::TOO_MANY_REQUESTS, format!("at most {MAX_OFFERS_PER_ROLE} bidders per role")).into_response();
         }
     }
-    for p in &req.providers {
-        if !ROLES.contains(&p.role.as_str()) {
-            return (axum::http::StatusCode::BAD_REQUEST, format!("unknown role '{}' (must be one of {ROLES:?})", p.role)).into_response();
-        }
-        let trimmed = p.who.trim();
-        if trimmed.is_empty() || trimmed.len() > MAX_NAME_LEN {
-            return (axum::http::StatusCode::BAD_REQUEST, format!("provider name must be 1..={MAX_NAME_LEN} chars")).into_response();
-        }
-        if p.units == 0 {
-            return (axum::http::StatusCode::BAD_REQUEST, "units must be > 0").into_response();
-        }
+    let holder = req.offer.holder_pubkey;
+    let units = req.offer.units_available;
+    let price = req.offer.min_price;
+    map.insert(holder, SubmittedOffer { display_name: name.to_string(), role: req.role.clone(), offer: req.offer });
+    drop(map);
+    let _ = st.tx.send(json!({"type": "offer_submitted", "role": req.role, "who": name, "units": units, "price": price}).to_string());
+    axum::http::StatusCode::NO_CONTENT.into_response()
+}
+
+/// A visitor's own single bid -- genuine influence over the input (like typing a task),
+/// not a fabricated roster of competitors. Signed server-side with a name-derived key
+/// (so re-submitting the same name updates the same entry) purely because a browser
+/// tab has no ed25519 identity of its own to sign with; every other bidder on the
+/// board is a real, separate process (see `POST /offers/submit`).
+#[derive(Deserialize)]
+struct MineReq {
+    role: String,
+    who: String,
+    units: u64,
+    price: u64,
+}
+
+async fn offers_mine_handler(State(st): State<Arc<BridgeState>>, Json(req): Json<MineReq>) -> impl IntoResponse {
+    if !ROLES.contains(&req.role.as_str()) {
+        return (axum::http::StatusCode::BAD_REQUEST, format!("unknown role '{}' (must be one of {ROLES:?})", req.role)).into_response();
     }
-    let cleaned: Vec<ProviderInput> = req
-        .providers
-        .into_iter()
-        .map(|p| ProviderInput { who: p.who.trim().to_string(), ..p })
-        .collect();
-    *st.providers.lock().unwrap_or_else(|e| e.into_inner()) = cleaned.clone();
-    let _ = st.tx.send(
-        json!({"type": "offers_updated", "providers": cleaned.iter().map(|p| json!({"role": p.role, "who": p.who, "units": p.units, "price": p.price})).collect::<Vec<_>>()})
-            .to_string(),
+    let who = req.who.trim();
+    if who.is_empty() || who.len() > MAX_NAME_LEN {
+        return (axum::http::StatusCode::BAD_REQUEST, format!("name must be 1..={MAX_NAME_LEN} chars")).into_response();
+    }
+    if req.units == 0 {
+        return (axum::http::StatusCode::BAD_REQUEST, "units must be > 0").into_response();
+    }
+    let service = service_for_role(&req.role).expect("role already validated");
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(&Sha256::digest(format!("visitor:{who}").as_bytes()));
+    let sk = SigningKey::from_bytes(&seed);
+    let now = now_secs();
+    let offer = CapacityOffer::sign_new_with_services(
+        &sk,
+        CapacityKind::CloudApiQuota,
+        vec!["claude".into()],
+        req.units,
+        req.price,
+        "demo-credits".into(),
+        now,
+        now + 10 * 365 * 24 * 3600,
+        vec![service],
     );
+    let mut map = st.offers.lock().unwrap_or_else(|e| e.into_inner());
+    let already_here = map.contains_key(&offer.holder_pubkey);
+    if !already_here {
+        let count = map.values().filter(|e| e.role == req.role).count();
+        if count >= MAX_OFFERS_PER_ROLE {
+            return (axum::http::StatusCode::TOO_MANY_REQUESTS, format!("at most {MAX_OFFERS_PER_ROLE} bidders per role")).into_response();
+        }
+    }
+    map.insert(offer.holder_pubkey, SubmittedOffer { display_name: format!("{who} (you)"), role: req.role.clone(), offer });
+    drop(map);
+    let _ = st.tx.send(json!({"type": "offer_submitted", "role": req.role, "who": format!("{who} (you)"), "units": req.units, "price": req.price}).to_string());
     axum::http::StatusCode::NO_CONTENT.into_response()
 }
 
@@ -257,7 +296,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (tx, _rx) = broadcast::channel::<String>(64);
     let state = Arc::new(BridgeState {
         spec: demo_spec(),
-        providers: Mutex::new(default_providers()),
+        offers: Mutex::new(HashMap::new()),
         selection: Mutex::new(SelectionState::default()),
         tx,
     });
@@ -267,12 +306,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .route("/events", get(events_handler))
         .route("/run", post(run_handler))
         .route("/reset", post(reset_handler))
-        .route("/offers", get(offers_get_handler).post(offers_post_handler))
+        .route("/offers", get(offers_get_handler))
+        .route("/offers/submit", post(offers_submit_handler))
+        .route("/offers/mine", post(offers_mine_handler))
         .with_state(state);
 
     let addr = std::env::var("AUCTION_BRIDGE_LISTEN").unwrap_or_else(|_| "0.0.0.0:8789".to_string());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    eprintln!("auction-demo-bridge: serving on {addr}");
+    eprintln!("auction-demo-bridge: serving on {addr} -- waiting for real provider processes to submit offers");
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -281,76 +322,57 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn demo_offers_are_validly_signed_and_clear_via_the_real_auction() {
-        let now = 1_000;
-        let providers = default_providers();
-        let offers: Vec<CapacityOffer> = providers.iter().filter_map(|p| p.sign(now)).collect();
-        assert_eq!(offers.len(), providers.len());
-        for o in &offers {
-            assert!(o.is_valid(now), "every demo offer must carry a real, currently-valid signature");
-        }
-
-        let spec = demo_spec();
-        let label = label_for(&providers);
-        let mut state = SelectionState::default();
-        let views = spec
-            .auction_view(&offers, now, SelectionPolicy::LowestFloor, &mut state, label)
-            .expect("both roles have qualifying offers");
-        assert_eq!(views.len(), 2);
-
-        let reviewer = views.iter().find(|v| v.role == "reviewer").unwrap();
-        assert_eq!(reviewer.bids.len(), 3, "all three reviewer providers are shown");
-        let winner = reviewer.bids.iter().find(|b| b.win).unwrap();
-        assert_eq!(winner.who, "borealis", "cheapest reviewer floor (45) wins under LowestFloor");
-
-        let writer = views.iter().find(|v| v.role == "writer").unwrap();
-        let winner = writer.bids.iter().find(|b| b.win).unwrap();
-        assert_eq!(winner.who, "foxtrot", "cheapest writer floor (22) wins under LowestFloor");
+    fn real_offer(seed_input: &str, role: &str, units: u64, price: u64, now: u64) -> CapacityOffer {
+        let mut seed = [0u8; 32];
+        seed.copy_from_slice(&Sha256::digest(seed_input.as_bytes()));
+        let sk = SigningKey::from_bytes(&seed);
+        CapacityOffer::sign_new_with_services(
+            &sk,
+            CapacityKind::CloudApiQuota,
+            vec!["claude".into()],
+            units,
+            price,
+            "demo-credits".into(),
+            now,
+            now + 10 * 365 * 24 * 3600,
+            vec![service_for_role(role).unwrap()],
+        )
     }
 
     #[test]
-    fn round_robin_alternates_across_repeated_clears_unlike_lowest_floor() {
-        // Demonstrates the actual point of the demo: switching SelectionPolicy really
-        // changes the outcome, using the real convene_with_policy/auction_view logic.
-        let now = 1_000;
-        let providers = default_providers();
-        let offers: Vec<CapacityOffer> = providers.iter().filter_map(|p| p.sign(now)).collect();
+    fn a_real_auction_round_clears_over_independently_signed_offers() {
+        let now = now_secs();
         let spec = demo_spec();
-        let label = label_for(&providers);
-
-        let mut lf_state = SelectionState::default();
-        let a = spec.auction_view(&offers, now, SelectionPolicy::LowestFloor, &mut lf_state, &label).unwrap();
-        let b = spec.auction_view(&offers, now, SelectionPolicy::LowestFloor, &mut lf_state, &label).unwrap();
-        let winner_a = a.iter().find(|v| v.role == "reviewer").unwrap().bids.iter().find(|x| x.win).unwrap().who.clone();
-        let winner_b = b.iter().find(|v| v.role == "reviewer").unwrap().bids.iter().find(|x| x.win).unwrap().who.clone();
-        assert_eq!(winner_a, winner_b, "LowestFloor is deterministic across repeated clears");
-
-        let mut rr_state = SelectionState::default();
-        let mut winners = vec![];
-        for _ in 0..3 {
-            let v = spec.auction_view(&offers, now, SelectionPolicy::RoundRobin, &mut rr_state, &label).unwrap();
-            winners.push(v.iter().find(|x| x.role == "reviewer").unwrap().bids.iter().find(|x| x.win).unwrap().who.clone());
-        }
-        assert_ne!(winners[0], winners[1], "RoundRobin rotates the winner across clears, ignoring price");
+        let mut selection = SelectionState::default();
+        let offers = vec![
+            real_offer("aurora", "reviewer", 15, 60, now),
+            real_offer("borealis", "reviewer", 12, 45, now),
+            real_offer("delta", "writer", 25, 30, now),
+        ];
+        let mut labels = HashMap::new();
+        labels.insert(offers[0].holder_pubkey, "aurora".to_string());
+        labels.insert(offers[1].holder_pubkey, "borealis".to_string());
+        labels.insert(offers[2].holder_pubkey, "delta".to_string());
+        let label = move |pk: &[u8; 32]| labels.get(pk).cloned().unwrap_or_else(|| "unknown".into());
+        let views = spec.auction_view(&offers, now, SelectionPolicy::LowestFloor, &mut selection, label).expect("clears");
+        let reviewer = views.iter().find(|v| v.role == "reviewer").expect("reviewer role present");
+        let winner = reviewer.bids.iter().find(|b| b.win).expect("a winner exists");
+        assert_eq!(winner.who, "borealis", "lowest floor among {{45, 60}} must win");
     }
 
     #[test]
-    fn user_edited_offer_terms_flow_through_to_the_real_clear() {
-        // The point of /offers: a visitor's own numbers, re-signed for real, actually
-        // change who wins -- not a cosmetic edit.
-        let now = 1_000;
-        let mut providers = default_providers();
-        // Undercut the current cheapest reviewer bid (borealis @ 45) with a new bidder.
-        providers.push(ProviderInput { role: "reviewer".into(), who: "zeta".into(), units: 10, price: 5 });
-        let offers: Vec<CapacityOffer> = providers.iter().filter_map(|p| p.sign(now)).collect();
-        let spec = demo_spec();
-        let label = label_for(&providers);
-        let mut state = SelectionState::default();
-        let views = spec.auction_view(&offers, now, SelectionPolicy::LowestFloor, &mut state, label).unwrap();
-        let reviewer = views.iter().find(|v| v.role == "reviewer").unwrap();
-        assert_eq!(reviewer.bids.len(), 4, "the new bidder is shown alongside the defaults");
-        let winner = reviewer.bids.iter().find(|b| b.win).unwrap();
-        assert_eq!(winner.who, "zeta", "the visitor's cheaper offer wins for real");
+    fn is_valid_rejects_a_tampered_offer() {
+        let now = now_secs();
+        let mut offer = real_offer("aurora", "reviewer", 15, 60, now);
+        offer.min_price = 1; // tamper after signing -- signature no longer covers this value
+        assert!(!offer.is_valid(now), "a tampered offer must not verify");
+    }
+
+    #[test]
+    fn different_seeds_never_collide_on_holder_pubkey() {
+        let now = now_secs();
+        let a = real_offer("aurora", "reviewer", 15, 60, now);
+        let b = real_offer("borealis", "reviewer", 12, 45, now);
+        assert_ne!(a.holder_pubkey, b.holder_pubkey);
     }
 }

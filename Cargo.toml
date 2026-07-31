@@ -8,6 +8,10 @@ rust-version = "1.85"
 name = "auction-demo-bridge"
 path = "src/main.rs"
 
+[[bin]]
+name = "auction-demo-provider"
+path = "src/bin/provider.rs"
+
 [dependencies]
 # Pinned to a CADS-Tunnel tag (not vendored, not crates.io-published), same convention
 # ct-agent's own Cargo.toml uses for the same crate: v0.4.0 already carries #227/#228
@@ -19,5 +23,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ed25519-dalek = "2"
 sha2 = "0.10"
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
