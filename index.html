@@ -5,237 +5,165 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CADS-auction-demo — live workflow-pipeline auction</title>
 <style>
-  :root {
-    --bg: #0d1117;
-    --panel: #151b23;
-    --panel-border: #232b36;
-    --text: #e6edf3;
-    --muted: #8b96a5;
-    --accent: #4fd1c5;
-    --accent-dim: #245952;
-    --win: #4fd17a;
-    --danger: #e5534b;
+ :root{
+  --bg:#0c111d; --panel:#141b2c; --panel2:#1a2338; --line:#2a3450; --line-soft:#212a41;
+  --text:#eef1f7; --muted:#8a93ad; --muted2:#c3c9db;
+  --accent:#d98a4f; --accent-soft:#a8683a; --accent2:#5fb8ab;
+  --win:#5fb8ab; --danger:#e5654f;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --serif:ui-serif,Georgia,"Iowan Old Style","Palatino Linotype",serif;
+ }
+ @media (prefers-color-scheme: light){
+  :root{
+   --bg:#f5f7fb; --panel:#ffffff; --panel2:#eef1f8; --line:#d7deec; --line-soft:#e3e8f3;
+   --text:#131a2c; --muted:#5b6478; --muted2:#333d54;
+   --accent:#b8672f; --accent-soft:#8f4f24; --accent2:#2f8a7d; --win:#2f8a7d;
   }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
-    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  }
-  header {
-    padding: 2rem 1.25rem 1rem;
-    max-width: 920px;
-    margin: 0 auto;
-  }
-  h1 { font-size: 1.5rem; margin: 0 0 0.4rem; }
-  .sub { color: var(--muted); font-size: 0.95rem; max-width: 60ch; }
-  .honesty {
-    margin-top: 0.9rem;
-    padding: 0.75rem 1rem;
-    background: #1a2230;
-    border: 1px solid var(--panel-border);
-    border-radius: 8px;
-    font-size: 0.87rem;
-    color: var(--muted);
-  }
-  .honesty b { color: var(--text); }
-  main { max-width: 920px; margin: 0 auto; padding: 0 1.25rem 3rem; }
-  .controls {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.6rem;
-    align-items: center;
-    margin: 1.25rem 0;
-  }
-  .policy-group { display: flex; gap: 0.4rem; background: var(--panel); border: 1px solid var(--panel-border); border-radius: 8px; padding: 0.25rem; }
-  .policy-btn, .action-btn {
-    font: inherit;
-    border: 0;
-    border-radius: 6px;
-    padding: 0.5rem 0.9rem;
-    cursor: pointer;
-    background: transparent;
-    color: var(--muted);
-  }
-  .policy-btn.active { background: var(--accent-dim); color: var(--text); }
-  .action-btn.primary { background: var(--accent); color: #04211d; font-weight: 600; }
-  .action-btn.primary:hover { filter: brightness(1.08); }
-  .action-btn.ghost { border: 1px solid var(--panel-border); color: var(--muted); }
-  .status { font-size: 0.85rem; color: var(--muted); min-height: 1.2em; }
-  .roles { display: grid; grid-template-columns: 1fr; gap: 1rem; }
-  @media (min-width: 720px) { .roles { grid-template-columns: 1fr 1fr; } }
-  .role-panel {
-    background: var(--panel);
-    border: 1px solid var(--panel-border);
-    border-radius: 10px;
-    padding: 1rem 1.1rem;
-    min-height: 220px;
-  }
-  .role-panel h2 { margin: 0 0 0.15rem; font-size: 1.05rem; }
-  .role-panel .role-meta { color: var(--muted); font-size: 0.82rem; margin-bottom: 0.75rem; }
-  .bid-list { display: flex; flex-direction: column; gap: 0.4rem; }
-  .bid {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 0.45rem 0.65rem;
-    border-radius: 6px;
-    background: #0f151d;
-    border: 1px solid var(--panel-border);
-    font-size: 0.9rem;
-    opacity: 0;
-    transform: translateY(4px);
-    animation: appear 0.25s ease forwards;
-  }
-  @keyframes appear { to { opacity: 1; transform: none; } }
-  .bid.win { border-color: var(--win); background: #10241a; }
-  .bid .who { font-weight: 600; }
-  .bid .terms { color: var(--muted); font-variant-numeric: tabular-nums; }
-  .bid.win .who::after { content: " — winner"; color: var(--win); font-weight: 500; }
-  .empty-hint { color: var(--muted); font-size: 0.85rem; }
-  footer { max-width: 920px; margin: 0 auto; padding: 1rem 1.25rem 3rem; color: var(--muted); font-size: 0.8rem; }
-  a { color: var(--accent); }
-  code { background: #1a2230; padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.85em; }
+ }
+ *{box-sizing:border-box}
+ body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased}
+ a{color:var(--accent2)}
+ code{font-family:var(--mono);background:var(--panel2);padding:.1rem .35rem;border-radius:4px;font-size:.85em}
+ h1,h2,h3{font-family:var(--serif);font-weight:600;letter-spacing:-.01em;margin:0}
 
-  .editor-toggle { margin: 0.25rem 0 1rem; }
-  .editor {
-    background: var(--panel);
-    border: 1px solid var(--panel-border);
-    border-radius: 10px;
-    padding: 1rem 1.1rem;
-    margin-bottom: 1rem;
-  }
-  .editor h2 { margin: 0 0 0.25rem; font-size: 1.05rem; }
-  .editor .editor-sub { color: var(--muted); font-size: 0.85rem; margin-bottom: 0.9rem; }
-  .editor-role-block + .editor-role-block { margin-top: 1rem; }
-  .editor-role-block h3 { margin: 0 0 0.5rem; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
-  .provider-row { display: grid; grid-template-columns: 1.4fr 0.8fr 0.8fr auto; gap: 0.4rem; align-items: center; margin-bottom: 0.4rem; }
-  .provider-row input {
-    font: inherit;
-    background: #0f151d;
-    border: 1px solid var(--panel-border);
-    color: var(--text);
-    border-radius: 6px;
-    padding: 0.4rem 0.55rem;
-    width: 100%;
-  }
-  .provider-row .remove-btn {
-    background: transparent;
-    border: 1px solid var(--panel-border);
-    color: var(--danger);
-    border-radius: 6px;
-    width: 1.9rem;
-    height: 1.9rem;
-    cursor: pointer;
-  }
-  .add-row-btn {
-    font: inherit;
-    background: transparent;
-    border: 1px dashed var(--panel-border);
-    color: var(--muted);
-    border-radius: 6px;
-    padding: 0.35rem 0.7rem;
-    cursor: pointer;
-    margin-top: 0.15rem;
-  }
-  .add-row-btn:hover { color: var(--text); border-color: var(--accent-dim); }
-  .editor-actions { margin-top: 1rem; display: flex; gap: 0.6rem; align-items: center; }
-  .field-labels { display: grid; grid-template-columns: 1.4fr 0.8fr 0.8fr auto; gap: 0.4rem; font-size: 0.72rem; color: var(--muted); margin-bottom: 0.3rem; }
-  .board-rows { display: flex; flex-direction: column; gap: 0.35rem; margin-bottom: 0.5rem; }
-  .board-row {
-    display: grid; grid-template-columns: 1.4fr 0.8fr 0.8fr; gap: 0.4rem; align-items: center;
-    padding: 0.4rem 0.55rem; border-radius: 6px; background: #0f151d; border: 1px solid var(--panel-border);
-    font-size: 0.87rem; opacity: 0; transform: translateY(4px); animation: appear 0.25s ease forwards;
-  }
-  .board-row .who { font-weight: 600; }
-  .board-row .n { color: var(--muted); font-variant-numeric: tabular-nums; }
-  #mine-row { display: grid; grid-template-columns: 0.9fr 1.1fr 0.7fr 0.7fr auto; gap: 0.4rem; align-items: center; }
-  #mine-row select, #mine-row input {
-    font: inherit; background: #0f151d; border: 1px solid var(--panel-border); color: var(--text);
-    border-radius: 6px; padding: 0.4rem 0.55rem; width: 100%;
-  }
+ header.hero{border-bottom:1px solid var(--line);
+  background-image:linear-gradient(var(--line-soft) 1px, transparent 1px),linear-gradient(90deg, var(--line-soft) 1px, transparent 1px);
+  background-size:34px 34px}
+ .hero-inner,main,footer.site-footer .footer-inner{max-width:62rem;margin:0 auto;padding:0 1.5rem}
+ header.hero .hero-inner{padding-top:2.2rem;padding-bottom:2.4rem}
+ .brand{font-family:var(--serif);font-size:1rem;color:var(--muted);display:flex;align-items:center;gap:.5rem;margin-bottom:1.3rem}
+ .brand .flame{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px rgba(217,138,79,.22)}
+ .brand a{color:var(--muted2);text-decoration:none}
+ .brand a:hover{text-decoration:underline}
+
+ .eyebrow{font-family:var(--mono);font-size:.76rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent2);
+  display:flex;align-items:center;gap:.5rem;margin:0 0 1.05rem}
+ .eyebrow::before{content:"";width:1.4rem;height:1px;background:var(--accent2)}
+ h1{font-size:clamp(1.6rem,3.4vw,2.15rem);line-height:1.2;margin-bottom:.85rem}
+ .lede{font-size:1rem;color:var(--muted2);max-width:44rem;margin:0}
+
+ .callout{background:var(--panel);border:1px solid var(--line);border-left:2px solid var(--accent2);border-radius:8px;
+  padding:1.05rem 1.25rem;font-size:.9rem;color:var(--muted2);margin-top:1.5rem}
+ .callout b{color:var(--text)}
+
+ main{padding-top:2.4rem;padding-bottom:3rem}
+ h2.section-title{font-size:1.08rem;margin-bottom:.6rem}
+
+ .lanes{display:grid;grid-template-columns:1fr;gap:1rem;margin-bottom:1.6rem}
+ @media (min-width:760px){ .lanes{grid-template-columns:1fr 1fr} }
+ .diagram-card{border:1px solid var(--line);border-radius:12px;background:var(--panel);overflow:hidden}
+ .diagram-head{display:flex;justify-content:space-between;align-items:center;padding:.75rem .95rem;
+  border-bottom:1px solid var(--line);font-family:var(--mono);font-size:.7rem;color:var(--muted)}
+ .diagram-head .live{display:flex;align-items:center;gap:.4rem;color:var(--accent2)}
+ .diagram-head .live i{width:6px;height:6px;border-radius:50%;background:var(--accent2);display:inline-block;
+  animation:pulse 1.6s ease-in-out infinite;font-style:normal}
+ @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+ canvas.lane-canvas{display:block;width:100%;height:190px}
+ .diagram-foot{display:flex;justify-content:space-between;padding:.6rem .95rem;border-top:1px solid var(--line);
+  font-family:var(--mono);font-size:.68rem;color:var(--muted)}
+ @media (prefers-reduced-motion: reduce){ .diagram-head .live i{animation:none} }
+
+ .add-bid{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:1.1rem 1.3rem;margin-bottom:1.6rem}
+ .add-bid-sub{color:var(--muted);font-size:.85rem;margin-bottom:.8rem}
+ #mine-row{display:grid;grid-template-columns:0.9fr 1.1fr 0.7fr 0.7fr auto;gap:.5rem;align-items:center}
+ #mine-row select,#mine-row input{font:inherit;background:var(--bg);border:1px solid var(--line);color:var(--text);
+  border-radius:6px;padding:.5rem .7rem;width:100%}
+ #mine-row select:focus,#mine-row input:focus{outline:none;border-color:var(--accent2)}
+
+ .controls{display:flex;flex-wrap:wrap;gap:.6rem;align-items:center;margin:0 0 1rem}
+ .policy-group{display:flex;gap:.3rem;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:.25rem}
+ .policy-btn{font:inherit;border:0;border-radius:6px;padding:.5rem .9rem;cursor:pointer;background:transparent;color:var(--muted);font-size:.87rem}
+ .policy-btn.active{background:var(--accent-soft);color:#fff}
+ a.btn,.action-btn{display:inline-flex;align-items:center;gap:.4rem;border:1px solid transparent;border-radius:6px;
+  padding:.55rem 1.05rem;font-weight:600;font-size:.87rem;cursor:pointer;text-decoration:none;transition:filter .15s ease,transform .15s ease}
+ .action-btn.primary{background:var(--accent);color:#20130a}
+ .action-btn.primary:hover{filter:brightness(1.08);transform:translateY(-1px)}
+ .action-btn.ghost{background:transparent;color:var(--muted2);border-color:var(--line)}
+ .action-btn.ghost:hover{background:var(--panel2);border-color:var(--muted)}
+ .status{font-family:var(--mono);font-size:.83rem;color:var(--muted);min-height:1.2em;margin-bottom:1rem}
+
+ footer.site-footer{border-top:1px solid var(--line);padding:1.8rem 1.5rem;margin-top:1rem}
+ footer.site-footer .foot{color:var(--muted);font-size:.82rem;max-width:40rem}
+ footer.site-footer a{text-decoration:none;color:var(--muted2)}
+ footer.site-footer a:hover{text-decoration:underline}
 </style>
 </head>
 <body>
-<header>
-  <h1>Live workflow-pipeline auction</h1>
-  <div class="sub">
-    Watching <code>ct_common::pipeline::PipelineSpec::auction_view</code> — CADS-Tunnel's real,
-    tested per-role clearing algorithm — run live in the browser.
+<header class="hero">
+ <div class="hero-inner">
+  <div class="brand"><span class="flame"></span><a href="https://bunsenbrenner.org/">Bunsenbrenner.org</a><span>/ auction-demo</span></div>
+  <div class="eyebrow">Workflow-pipeline auction &middot; live, real bidders</div>
+  <h1>Six real processes bid; one real algorithm clears</h1>
+  <p class="lede">
+   Watching <code>ct_common::pipeline::PipelineSpec::auction_view</code> — CADS-Tunnel's real,
+   tested per-role clearing algorithm — run live in the browser over offers submitted by six
+   genuinely independent bidder processes.
+  </p>
+  <div class="callout">
+   <b>What's real:</b> every bidder below is its own genuinely independent process
+   (<code>auction-demo-provider</code>, one per container) holding its own randomly-generated
+   ed25519 identity, signing its own real <code>ct_common::channel::CapacityOffer</code>, and
+   submitting it to this bridge — which verifies the signature
+   (<code>CapacityOffer::is_valid</code>) rather than trusting or fabricating it. The auction
+   algorithm (<code>convene_with_policy</code>/<code>auction_view</code>) runs live on exactly
+   those verified offers. You can add one bid of your own too. <b>What's simulated:</b> nothing
+   about the bidders, the signatures, or the clearing — the only thing generated per round is a
+   visitor's own optional bid.
   </div>
-  <div class="honesty">
-    <b>What's real:</b> every bidder below is its own genuinely independent process
-    (<code>auction-demo-provider</code>, one per container) holding its own randomly-generated
-    ed25519 identity, signing its own real <code>ct_common::channel::CapacityOffer</code>, and
-    submitting it to this bridge — which verifies the signature (<code>CapacityOffer::is_valid</code>)
-    rather than trusting or fabricating it. The auction algorithm
-    (<code>convene_with_policy</code>/<code>auction_view</code>) runs live on exactly those verified
-    offers. You can add one bid of your own below, too. <b>What's simulated:</b> nothing about the
-    bidders, the signatures, or the clearing — the only thing generated per round is the task you
-    add, same as everywhere else on these demos. Each bid appears with a short deliberate pause so
-    you can watch it happen; the real computation itself is effectively instant.
-  </div>
+ </div>
 </header>
 <main>
-  <div class="editor">
-    <h2>Live bidder board</h2>
-    <div class="editor-sub">
-      Each row is a real offer submitted by its own separate <code>auction-demo-provider</code>
-      process, verified server-side. This board reflects whatever's actually currently registered —
-      it's not something this dashboard controls.
-    </div>
-    <div class="editor-role-block" data-role="reviewer">
-      <h3>reviewer (SecurityReview)</h3>
-      <div class="field-labels"><span>name</span><span>units</span><span>price</span></div>
-      <div class="board-rows" id="board-reviewer"><div class="empty-hint">waiting for real providers to submit…</div></div>
-    </div>
-    <div class="editor-role-block" data-role="writer">
-      <h3>writer (TextGeneration)</h3>
-      <div class="field-labels"><span>name</span><span>units</span><span>price</span></div>
-      <div class="board-rows" id="board-writer"><div class="empty-hint">waiting for real providers to submit…</div></div>
-    </div>
-    <div class="editor-role-block">
-      <h3>add your own bid</h3>
-      <div class="provider-row" id="mine-row">
-        <select class="f-role"><option value="reviewer">reviewer</option><option value="writer">writer</option></select>
-        <input type="text" class="f-who" placeholder="your name" maxlength="40">
-        <input type="number" class="f-units" value="10" min="1">
-        <input type="number" class="f-price" value="10" min="0">
-        <button class="add-row-btn" id="mine-submit">submit</button>
-      </div>
-    </div>
-    <div class="editor-actions">
-      <button class="action-btn ghost" id="revert-btn">Reset board (real providers resubmit within ~20s)</button>
-    </div>
+ <h2 class="section-title">Live bidder board</h2>
+ <div class="lanes">
+  <div class="diagram-card">
+   <div class="diagram-head">
+    <span>REVIEWER &middot; SecurityReview, 10 units</span>
+    <span class="live" id="live-reviewer"><i></i>live</span>
+   </div>
+   <canvas class="lane-canvas" id="stage-reviewer" width="440" height="190" aria-label="Diagram: real reviewer bidders converging on the auction, with the winner highlighted after a round."></canvas>
+   <div class="diagram-foot"><span id="foot-reviewer">waiting for real bidders…</span><span>lowest floor wins</span></div>
   </div>
-  <div class="controls">
-    <div class="policy-group" id="policy-group">
-      <button class="policy-btn active" data-policy="lowest_floor">Lowest Floor</button>
-      <button class="policy-btn" data-policy="round_robin">Round Robin</button>
-      <button class="policy-btn" data-policy="least_calls">Least Calls</button>
-    </div>
-    <button class="action-btn primary" id="run-btn">Run auction round</button>
-    <button class="action-btn ghost" id="reset-btn">Reset state</button>
+  <div class="diagram-card">
+   <div class="diagram-head">
+    <span>WRITER &middot; TextGeneration, 20 units</span>
+    <span class="live" id="live-writer"><i></i>live</span>
+   </div>
+   <canvas class="lane-canvas" id="stage-writer" width="440" height="190" aria-label="Diagram: real writer bidders converging on the auction, with the winner highlighted after a round."></canvas>
+   <div class="diagram-foot"><span id="foot-writer">waiting for real bidders…</span><span>lowest floor wins</span></div>
   </div>
-  <div class="status" id="status"></div>
-  <div class="roles">
-    <section class="role-panel" data-role="reviewer">
-      <h2>reviewer</h2>
-      <div class="role-meta">requires SecurityReview, 10 units</div>
-      <div class="bid-list" id="bids-reviewer"><div class="empty-hint">No round run yet.</div></div>
-    </section>
-    <section class="role-panel" data-role="writer">
-      <h2>writer</h2>
-      <div class="role-meta">requires TextGeneration, 20 units</div>
-      <div class="bid-list" id="bids-writer"><div class="empty-hint">No round run yet.</div></div>
-    </section>
+ </div>
+
+ <div class="add-bid">
+  <h3 style="font-size:.95rem;margin-bottom:.3rem">Add your own bid</h3>
+  <div class="add-bid-sub">Signed server-side with your name — a real, single, visitor-supplied offer, not a fabricated roster.</div>
+  <div id="mine-row">
+   <select class="f-role"><option value="reviewer">reviewer</option><option value="writer">writer</option></select>
+   <input type="text" class="f-who" placeholder="your name" maxlength="40">
+   <input type="number" class="f-units" value="10" min="1">
+   <input type="number" class="f-price" value="10" min="0">
+   <button class="action-btn ghost" id="mine-submit">submit</button>
   </div>
+ </div>
+
+ <div class="controls">
+  <div class="policy-group" id="policy-group">
+   <button class="policy-btn active" data-policy="lowest_floor">Lowest Floor</button>
+   <button class="policy-btn" data-policy="round_robin">Round Robin</button>
+   <button class="policy-btn" data-policy="least_calls">Least Calls</button>
+  </div>
+  <button class="action-btn primary" id="run-btn">Run auction round</button>
+  <button class="action-btn ghost" id="reset-btn">Reset board</button>
+ </div>
+ <div class="status" id="status"></div>
 </main>
-<footer>
-  Source: <a href="https://github.com/scimbe/CADS-auction-demo">scimbe/CADS-auction-demo</a>.
-  Auction primitive lives in <a href="https://github.com/scimbe/CADS-Tunnel">scimbe/CADS-Tunnel</a>
-  (<code>crates/common/src/pipeline.rs</code>).
+<footer class="site-footer">
+ <div class="footer-inner">
+  <div class="foot">
+   Source: <a href="https://github.com/scimbe/CADS-auction-demo">scimbe/CADS-auction-demo</a>.
+   Auction primitive lives in <a href="https://github.com/scimbe/CADS-Tunnel">scimbe/CADS-Tunnel</a>
+   (<code>crates/common/src/pipeline.rs</code>).
+  </div>
+ </div>
 </footer>
 <script>
 (() => {
@@ -250,14 +178,123 @@
     [...policyGroup.children].forEach((b) => b.classList.toggle("active", b === btn));
   });
 
-  // --- live bidder board: read-only, populated by real separate provider processes ---
+  // --- one lane diagram per role: N real bidder nodes -> a hub -> an outcome node.
+  // Same node/edge/packet rendering approach as bunsenbrenner.org's own landing-page
+  // diagrams; rebuilt whenever the real board changes, packets fire only on real events.
+  function makeLane(canvasId, role) {
+    const c = document.getElementById(canvasId);
+    const ctx = c.getContext("2d");
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+    function resize() {
+      const r = c.getBoundingClientRect();
+      c.width = r.width * devicePixelRatio; c.height = r.height * devicePixelRatio;
+      ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+    }
+    window.addEventListener("resize", resize);
+    resize();
+
+    let bidders = []; // [{who, units, price}]
+    let winner = null;
+    let packets = []; // { from: {x,y}, to: {x,y}, t0, duration, color }
+
+    function layout(w, h) {
+      const hubX = w * 0.58, outX = w * 0.9, bidX = w * 0.12;
+      const n = Math.max(bidders.length, 1);
+      const nodes = {};
+      bidders.forEach((b, i) => {
+        nodes["bid:" + b.who] = { x: bidX, y: h * ((i + 1) / (n + 1)), label: b.who };
+      });
+      nodes["hub"] = { x: hubX, y: h / 2, label: role };
+      nodes["out"] = { x: outX, y: h / 2, label: winner || "?" };
+      return nodes;
+    }
+
+    function pulseTo(who) {
+      const w = c.getBoundingClientRect().width, h = c.getBoundingClientRect().height;
+      const nodes = layout(w, h);
+      const from = nodes["bid:" + who], to = nodes["hub"];
+      if (!from || !to) return;
+      packets.push({ from, to, t0: performance.now(), duration: 700, color: "accent2" });
+    }
+
+    function pulseWin() {
+      const w = c.getBoundingClientRect().width, h = c.getBoundingClientRect().height;
+      const nodes = layout(w, h);
+      packets.push({ from: nodes["hub"], to: nodes["out"], t0: performance.now(), duration: 700, color: "accent" });
+    }
+
+    function draw() {
+      const r = c.getBoundingClientRect(); const w = r.width, h = r.height;
+      ctx.clearRect(0, 0, w, h);
+      const line = cssVar("--line"), muted = cssVar("--muted"), text = cssVar("--text"),
+            accent = cssVar("--accent"), accent2 = cssVar("--accent2"), panel = cssVar("--panel"), win = cssVar("--win");
+      const nodes = layout(w, h);
+      const bidKeys = Object.keys(nodes).filter((k) => k.startsWith("bid:"));
+      bidKeys.forEach((k) => {
+        const a = nodes[k], b = nodes["hub"];
+        ctx.strokeStyle = line; ctx.globalAlpha = 0.7; ctx.lineWidth = 1.4;
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+        ctx.globalAlpha = 1;
+      });
+      ctx.strokeStyle = line; ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.moveTo(nodes["hub"].x, nodes["hub"].y); ctx.lineTo(nodes["out"].x, nodes["out"].y); ctx.stroke();
+
+      bidKeys.forEach((k) => {
+        const p = nodes[k], who = k.slice(4);
+        const isWinner = winner === who;
+        ctx.beginPath(); ctx.arc(p.x, p.y, isWinner ? 7 : 5.5, 0, Math.PI * 2);
+        ctx.fillStyle = panel; ctx.fill();
+        ctx.lineWidth = 2; ctx.strokeStyle = isWinner ? win : muted; ctx.stroke();
+        ctx.font = (isWinner ? "600 " : "") + "10px " + (cssVar("--mono") || "monospace");
+        ctx.fillStyle = isWinner ? text : muted; ctx.textAlign = "left";
+        ctx.fillText(who, p.x + 11, p.y + 3);
+      });
+      const hub = nodes["hub"];
+      ctx.beginPath(); ctx.arc(hub.x, hub.y, 9, 0, Math.PI * 2);
+      ctx.fillStyle = panel; ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = accent2; ctx.stroke();
+      ctx.font = "10px " + (cssVar("--mono") || "monospace");
+      ctx.fillStyle = text; ctx.textAlign = "center";
+      ctx.fillText("auction", hub.x, hub.y - 15);
+
+      const out = nodes["out"];
+      ctx.beginPath(); ctx.arc(out.x, out.y, 8, 0, Math.PI * 2);
+      ctx.fillStyle = panel; ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = winner ? win : muted; ctx.stroke();
+      ctx.font = "600 10px " + (cssVar("--mono") || "monospace");
+      ctx.fillStyle = winner ? text : muted; ctx.textAlign = "center";
+      ctx.fillText(winner || "winner", out.x, out.y - 15);
+
+      const now = performance.now();
+      packets = packets.filter((pk) => now - pk.t0 < pk.duration);
+      packets.forEach((pk) => {
+        const pos = reduce ? 1 : Math.min((now - pk.t0) / pk.duration, 1);
+        const px = pk.from.x + (pk.to.x - pk.from.x) * pos, py = pk.from.y + (pk.to.y - pk.from.y) * pos;
+        const col = pk.color === "accent" ? accent : accent2;
+        ctx.beginPath(); ctx.arc(px, py, 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = col; ctx.shadowColor = col; ctx.shadowBlur = 8; ctx.fill(); ctx.shadowBlur = 0;
+      });
+      requestAnimationFrame(draw);
+    }
+    draw();
+
+    return {
+      setBidders(list) { bidders = list; },
+      pulseTo,
+      setWinner(who) { winner = who; if (who) pulseWin(); },
+      clearWinner() { winner = null; },
+    };
+  }
+
+  const lanes = { reviewer: makeLane("stage-reviewer", "reviewer"), writer: makeLane("stage-writer", "writer") };
+
   function renderBoard(offers) {
     for (const role of ["reviewer", "writer"]) {
-      const el = document.getElementById("board-" + role);
       const rows = offers.filter((o) => o.role === role);
-      el.innerHTML = rows.length
-        ? rows.map((o) => `<div class="board-row"><span class="who">${o.who}</span><span class="n">${o.units}u</span><span class="n">@ ${o.price}</span></div>`).join("")
-        : '<div class="empty-hint">waiting for real providers to submit…</div>';
+      lanes[role].setBidders(rows);
+      const foot = document.getElementById("foot-" + role);
+      foot.textContent = rows.length ? rows.length + " real bidder" + (rows.length === 1 ? "" : "s") + " online" : "waiting for real bidders…";
     }
   }
 
@@ -284,45 +321,18 @@
     statusEl.textContent = resp.ok ? "your bid is on the board." : "rejected: " + (await resp.text());
   });
 
-  document.getElementById("revert-btn").addEventListener("click", async () => {
+  document.getElementById("reset-btn").addEventListener("click", async () => {
     statusEl.textContent = "clearing the board…";
     await fetch("/reset", { method: "POST" });
   });
 
-  refreshBoard();
-
-  function clearPanel(role) {
-    const el = document.getElementById("bids-" + role);
-    el.innerHTML = "";
-  }
-
-  function addBid(role, who, units, price, win) {
-    const el = document.getElementById("bids-" + role);
-    const hint = el.querySelector(".empty-hint");
-    if (hint) hint.remove();
-    const row = document.createElement("div");
-    row.className = "bid" + (win ? " win" : "");
-    row.innerHTML = `<span class="who">${who}</span><span class="terms">${units}u @ ${price}</span>`;
-    el.appendChild(row);
-  }
-
-  function renderCleared(role, bids) {
-    clearPanel(role);
-    for (const b of bids) addBid(role, b.who, b.units, b.price, b.win);
-  }
-
   document.getElementById("run-btn").addEventListener("click", async () => {
     statusEl.textContent = "running…";
-    document.querySelectorAll(".role-panel .bid-list").forEach((el) => {
-      el.innerHTML = '<div class="empty-hint">Auctioning…</div>';
-    });
+    lanes.reviewer.clearWinner(); lanes.writer.clearWinner();
     await fetch("/run?policy=" + encodeURIComponent(policy), { method: "POST" });
   });
 
-  document.getElementById("reset-btn").addEventListener("click", async () => {
-    statusEl.textContent = "resetting round-robin / least-calls state…";
-    await fetch("/reset", { method: "POST" });
-  });
+  refreshBoard();
 
   const es = new EventSource("/events");
   es.onmessage = (ev) => {
@@ -334,11 +344,14 @@
         break;
       case "bid":
         statusEl.textContent = `bid seen: ${msg.who} (${msg.role})`;
+        if (lanes[msg.role]) lanes[msg.role].pulseTo(msg.who);
         break;
-      case "role_cleared":
-        renderCleared(msg.role, msg.bids);
-        statusEl.textContent = `${msg.role} cleared`;
+      case "role_cleared": {
+        const winnerBid = msg.bids.find((b) => b.win);
+        if (lanes[msg.role]) lanes[msg.role].setWinner(winnerBid ? winnerBid.who : null);
+        statusEl.textContent = `${msg.role} cleared` + (winnerBid ? `: ${winnerBid.who} wins` : "");
         break;
+      }
       case "round_done":
         statusEl.textContent = "round complete";
         break;
@@ -347,10 +360,8 @@
         break;
       case "reset":
         statusEl.textContent = "board cleared — real providers resubmit on their own schedule";
+        lanes.reviewer.clearWinner(); lanes.writer.clearWinner();
         refreshBoard();
-        document.querySelectorAll(".role-panel .bid-list").forEach((el) => {
-          el.innerHTML = '<div class="empty-hint">No round run yet.</div>';
-        });
         break;
       case "offer_submitted":
         // A real provider process (or your own bid) just registered -- keep the board in sync.
