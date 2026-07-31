@@ -18,8 +18,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    ports:
-      - "8789:8789"   # only for the local-only smoke test above; the public path goes through Caddy/the agent
+    # No `ports:` mapping -- matches CADS-flappy-demo/CADS-cookbook-demo's own bridge
+    # services, which never publish a host port either. This service was previously
+    # published on 0.0.0.0:8789 (a real regression: plain HTTP, no TLS, publicly
+    # reachable, bypassing Caddy/the edge entirely -- caught live on the production
+    # host alongside the identical CADS-a2a-demo bug). The local-only smoke test
+    # above still works via `docker run -p 127.0.0.1:8789:8789 ...` against a
+    # one-off container, never a host-wide port on the actual deployed service.
     restart: unless-stopped
 
   # Six genuinely independent bidder processes -- each its own container, its own
