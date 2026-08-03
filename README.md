@@ -107,6 +107,38 @@ zone-wide token) and relayed in as `fullchain.pem`/`privkey.pem` — this repo n
 runs an ACME client or holds a DNS credential. See CADS-Tunnel's
 `docs/dns01-desec.md` for the full cert-issuance walkthrough.
 
+## Self-hosting: running your own instance (not on the operator's host)
+
+Everything above the "Publishing it live" section works with zero CADS-Tunnel
+plane at all (local Docker Compose only). Only the public Browser-Plane
+publishing step needs one, and it doesn't have to be the operator's:
+
+1. **Your own CADS-Tunnel plane** — `./scripts/deploy-selfhost.sh --frontdoor`
+   in a `CADS-Tunnel` checkout (see its
+   [`docs/ops/runbook.md`](https://github.com/scimbe/CADS-Tunnel/blob/main/docs/ops/runbook.md)).
+   Generic, not tied to the operator's domain/account: set `DESEC_TOKEN` and
+   `PORTAL_PUBLIC_HOST` to **your own** domain (deSEC is free and works with any
+   domain you own, or even a free `yourname.dedyn.io` name — see
+   [`docs/dns01-desec.md`](https://github.com/scimbe/CADS-Tunnel/blob/main/docs/dns01-desec.md)).
+2. **A cert for your own subdomain** (e.g. `auction-demo.yourdomain.tld`) —
+   same deSEC DNS-01 mechanism your plane's front door already uses, or any
+   ACME method you prefer — into a local `fullchain.pem`/`privkey.pem` dir.
+3. **Run it against your plane, not the operator's:**
+   ```
+   AUCTION_CERT_DIR=/path/to/your/cert-dir \
+   HOSTNAME_FQDN=auction-demo.yourdomain.tld \
+   CP_URL=http://<your-plane-host>:8090 EDGE=<your-plane-host>:4433 \
+     ./run-demo.sh up
+   ```
+   (`run-demo.sh`'s own header comment documents every override var, including
+   host-authorization vars if your plane's edge gates that.)
+4. Point DNS for `auction-demo.yourdomain.tld` at your plane's host, then verify
+   with the same `curl`/browser checks in "Verifying the wiring" above, against
+   your own URL.
+
+Once this runs stably end to end on your own infrastructure, the operator's copy
+can be taken down.
+
 ## Layout
 
 - `src/main.rs` — the bridge: verifies real submitted `CapacityOffer`s
