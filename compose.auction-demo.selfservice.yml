@@ -98,7 +98,7 @@ services:
       context: .
       dockerfile: Agent.Dockerfile
       args:
-        - CT_AGENT_REF=${CT_AGENT_REF:-eb4de4d2427ce51e301c0bf31582cce4bbaa097c}
+        - CT_AGENT_REF=${CT_AGENT_REF:-3823343fdc47ea4ed91819cb68bfa8e89399f3f8}
     environment:
       - CT_AGENT_CP_URL=${AUCTION_AGENT_CP_URL:?control-plane URL}
       - CT_AGENT_TOKEN=${AUCTION_AGENT_TOKEN:?this tunnel's routing token, from the portal Install page}
@@ -120,9 +120,9 @@ services:
       dockerfile: Agent.Dockerfile
       args:
         # Keep in sync with CADS-webconference-demo/Agent.Dockerfile and
-        # CADS-flappy-demo/Agent.Dockerfile's own CT_AGENT_REF -- ct-agent#15's
-        # TCP-fallback keepalive fix (see those files' own comments for the story).
-        - CT_AGENT_REF=${CT_AGENT_REF:-eb4de4d2427ce51e301c0bf31582cce4bbaa097c}
+        # CADS-flappy-demo/Agent.Dockerfile's own CT_AGENT_REF. Bumped 2026-08-13
+        # to v0.4.8 (ADMISSION_EXCHANGE_TIMEOUT 15s -> 45s).
+        - CT_AGENT_REF=${CT_AGENT_REF:-3823343fdc47ea4ed91819cb68bfa8e89399f3f8}
     environment:
       - CT_AGENT_MODE=browser
       - CT_AGENT_HOSTNAME=auction-demo.bunsenbrenner.org
