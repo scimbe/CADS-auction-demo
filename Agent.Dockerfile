@@ -9,13 +9,15 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates git pkg-config libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 # Which ct-agent commit/tag to build -- bump deliberately.
-# Bumped 2026-08-13 to v0.4.8 (ADMISSION_EXCHANGE_TIMEOUT 15s -> 45s): the
-# actual root cause of the CADS-flappy-demo admission-stall saga, pinned by
-# the operator via live edge logs -- the edge parks a lone pairing member
-# for a 30s TTL, but the client's own timeout was only 15s. Keep in sync
-# with compose.auction-demo.yml and compose.auction-demo.selfservice.yml's
-# own CT_AGENT_REF (both the agent and cert service references).
-ARG CT_AGENT_REF=3823343fdc47ea4ed91819cb68bfa8e89399f3f8
+# Bumped 2026-08-19 to v0.5.7 (CADS-Tunnel#587): the previous pin
+# (3823343fdc47ea4ed91819cb68bfa8e89399f3f8) had silently drifted 77
+# commits/~6 days behind ct-agent main -- pulls in ct-agent#35/#41 (Noise-key
+# attestation now enforced on all three channel-session paths). Using a real
+# tag from here on, matching CADS-Tunnel's own relay-node.Dockerfile
+# convention. Keep in sync with compose.auction-demo.yml and
+# compose.auction-demo.selfservice.yml's own CT_AGENT_REF (both the agent
+# and cert service references).
+ARG CT_AGENT_REF=v0.5.7
 RUN git clone https://github.com/scimbe/ct-agent.git /build && cd /build && git checkout "${CT_AGENT_REF}"
 WORKDIR /build
 RUN --mount=type=cache,target=/usr/local/cargo/registry \

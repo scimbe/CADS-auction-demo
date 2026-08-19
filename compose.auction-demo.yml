@@ -87,7 +87,9 @@ services:
       context: .
       dockerfile: Agent.Dockerfile
       args:
-        - CT_AGENT_REF=${CT_AGENT_REF:-v0.5.4}
+        # Bumped 2026-08-19 to v0.5.7 (CADS-Tunnel#587): the previous v0.5.4
+        # fallback predates ct-agent#35/#41 (Noise-key attestation).
+        - CT_AGENT_REF=${CT_AGENT_REF:-v0.5.7}
     environment:
       - CT_AGENT_MODE=browser
       - CT_AGENT_FRAMED_FALLBACK=1  # CADS-Tunnel#528
