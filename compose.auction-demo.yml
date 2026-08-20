@@ -26,6 +26,12 @@ services:
     # above still works via `docker run -p 127.0.0.1:8789:8789 ...` against a
     # one-off container, never a host-wide port on the actual deployed service.
     restart: unless-stopped
+    # #1: same #312 rationale as CADS-Tunnel's core plane services (compose.selfhost.yml)
+    # -- this runs on the same swap-less shared host as production edge/control-plane, so
+    # an unbounded container here is one bad spike away from starving them too.
+    mem_limit: 128m
+    mem_reservation: 32m
+    cpus: 0.5
 
   # Six genuinely independent bidder processes -- each its own container, its own
   # randomly-generated ed25519 identity, signing its own real CapacityOffer and
@@ -37,36 +43,66 @@ services:
     environment: [PROVIDER_NAME=aurora, PROVIDER_ROLE=reviewer, PROVIDER_UNITS=15, PROVIDER_PRICE=60, "BRIDGE_URL=http://auction-demo-bridge:8789"]
     depends_on: [auction-demo-bridge]
     restart: unless-stopped
+    # #1: same #312 rationale as auction-demo-bridge above -- sized lighter, matching a
+    # single tiny standalone provider process's real footprint (~1-2MB actual usage).
+    mem_limit: 64m
+    mem_reservation: 16m
+    cpus: 0.25
 
   auction-demo-provider-borealis:
     build: { context: ., dockerfile: Provider.Dockerfile }
     environment: [PROVIDER_NAME=borealis, PROVIDER_ROLE=reviewer, PROVIDER_UNITS=12, PROVIDER_PRICE=45, "BRIDGE_URL=http://auction-demo-bridge:8789"]
     depends_on: [auction-demo-bridge]
     restart: unless-stopped
+    # #1: same #312 rationale as auction-demo-bridge above -- sized lighter, matching a
+    # single tiny standalone provider process's real footprint (~1-2MB actual usage).
+    mem_limit: 64m
+    mem_reservation: 16m
+    cpus: 0.25
 
   auction-demo-provider-cascade:
     build: { context: ., dockerfile: Provider.Dockerfile }
     environment: [PROVIDER_NAME=cascade, PROVIDER_ROLE=reviewer, PROVIDER_UNITS=20, PROVIDER_PRICE=55, "BRIDGE_URL=http://auction-demo-bridge:8789"]
     depends_on: [auction-demo-bridge]
     restart: unless-stopped
+    # #1: same #312 rationale as auction-demo-bridge above -- sized lighter, matching a
+    # single tiny standalone provider process's real footprint (~1-2MB actual usage).
+    mem_limit: 64m
+    mem_reservation: 16m
+    cpus: 0.25
 
   auction-demo-provider-delta:
     build: { context: ., dockerfile: Provider.Dockerfile }
     environment: [PROVIDER_NAME=delta, PROVIDER_ROLE=writer, PROVIDER_UNITS=25, PROVIDER_PRICE=30, "BRIDGE_URL=http://auction-demo-bridge:8789"]
     depends_on: [auction-demo-bridge]
     restart: unless-stopped
+    # #1: same #312 rationale as auction-demo-bridge above -- sized lighter, matching a
+    # single tiny standalone provider process's real footprint (~1-2MB actual usage).
+    mem_limit: 64m
+    mem_reservation: 16m
+    cpus: 0.25
 
   auction-demo-provider-echo:
     build: { context: ., dockerfile: Provider.Dockerfile }
     environment: [PROVIDER_NAME=echo, PROVIDER_ROLE=writer, PROVIDER_UNITS=30, PROVIDER_PRICE=38, "BRIDGE_URL=http://auction-demo-bridge:8789"]
     depends_on: [auction-demo-bridge]
     restart: unless-stopped
+    # #1: same #312 rationale as auction-demo-bridge above -- sized lighter, matching a
+    # single tiny standalone provider process's real footprint (~1-2MB actual usage).
+    mem_limit: 64m
+    mem_reservation: 16m
+    cpus: 0.25
 
   auction-demo-provider-foxtrot:
     build: { context: ., dockerfile: Provider.Dockerfile }
     environment: [PROVIDER_NAME=foxtrot, PROVIDER_ROLE=writer, PROVIDER_UNITS=28, PROVIDER_PRICE=22, "BRIDGE_URL=http://auction-demo-bridge:8789"]
     depends_on: [auction-demo-bridge]
     restart: unless-stopped
+    # #1: same #312 rationale as auction-demo-bridge above -- sized lighter, matching a
+    # single tiny standalone provider process's real footprint (~1-2MB actual usage).
+    mem_limit: 64m
+    mem_reservation: 16m
+    cpus: 0.25
 
   auction-demo-origin:
     build:
@@ -81,6 +117,10 @@ services:
     depends_on:
       - auction-demo-bridge
     restart: unless-stopped
+    # #1: same #312 rationale as auction-demo-bridge above.
+    mem_limit: 128m
+    mem_reservation: 32m
+    cpus: 0.5
 
   auction-demo-agent:
     build:
@@ -112,6 +152,10 @@ services:
     depends_on:
       - auction-demo-origin
     restart: unless-stopped
+    # #1: same #312 rationale as auction-demo-bridge above.
+    mem_limit: 128m
+    mem_reservation: 32m
+    cpus: 0.5
     volumes:
       - auction_demo_agent_state:/var/lib/ct-agent
 
