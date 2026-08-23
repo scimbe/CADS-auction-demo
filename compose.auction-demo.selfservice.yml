@@ -33,6 +33,12 @@ services:
     expose:
       - "8789"   # reached only by the origin's reverse_proxy on the compose network
     restart: unless-stopped
+    # #600-family: same rationale as compose.auction-demo.yml -- an unbounded
+    # container here is one bad spike away from starving whatever else shares this
+    # host, self-hosted plane or not.
+    mem_limit: 128m
+    mem_reservation: 32m
+    cpus: 0.5
 
   # Six genuinely independent bidder processes -- unchanged from the base compose
   # file, see its own comment (src/bin/provider.rs, README's "What's real, what's
@@ -42,36 +48,54 @@ services:
     environment: [PROVIDER_NAME=aurora, PROVIDER_ROLE=reviewer, PROVIDER_UNITS=15, PROVIDER_PRICE=60, "BRIDGE_URL=http://auction-demo-bridge:8789"]
     depends_on: [auction-demo-bridge]
     restart: unless-stopped
+    mem_limit: 64m
+    mem_reservation: 16m
+    cpus: 0.25
 
   auction-demo-provider-borealis:
     build: { context: ., dockerfile: Provider.Dockerfile }
     environment: [PROVIDER_NAME=borealis, PROVIDER_ROLE=reviewer, PROVIDER_UNITS=12, PROVIDER_PRICE=45, "BRIDGE_URL=http://auction-demo-bridge:8789"]
     depends_on: [auction-demo-bridge]
     restart: unless-stopped
+    mem_limit: 64m
+    mem_reservation: 16m
+    cpus: 0.25
 
   auction-demo-provider-cascade:
     build: { context: ., dockerfile: Provider.Dockerfile }
     environment: [PROVIDER_NAME=cascade, PROVIDER_ROLE=reviewer, PROVIDER_UNITS=20, PROVIDER_PRICE=55, "BRIDGE_URL=http://auction-demo-bridge:8789"]
     depends_on: [auction-demo-bridge]
     restart: unless-stopped
+    mem_limit: 64m
+    mem_reservation: 16m
+    cpus: 0.25
 
   auction-demo-provider-delta:
     build: { context: ., dockerfile: Provider.Dockerfile }
     environment: [PROVIDER_NAME=delta, PROVIDER_ROLE=writer, PROVIDER_UNITS=25, PROVIDER_PRICE=30, "BRIDGE_URL=http://auction-demo-bridge:8789"]
     depends_on: [auction-demo-bridge]
     restart: unless-stopped
+    mem_limit: 64m
+    mem_reservation: 16m
+    cpus: 0.25
 
   auction-demo-provider-echo:
     build: { context: ., dockerfile: Provider.Dockerfile }
     environment: [PROVIDER_NAME=echo, PROVIDER_ROLE=writer, PROVIDER_UNITS=30, PROVIDER_PRICE=38, "BRIDGE_URL=http://auction-demo-bridge:8789"]
     depends_on: [auction-demo-bridge]
     restart: unless-stopped
+    mem_limit: 64m
+    mem_reservation: 16m
+    cpus: 0.25
 
   auction-demo-provider-foxtrot:
     build: { context: ., dockerfile: Provider.Dockerfile }
     environment: [PROVIDER_NAME=foxtrot, PROVIDER_ROLE=writer, PROVIDER_UNITS=28, PROVIDER_PRICE=22, "BRIDGE_URL=http://auction-demo-bridge:8789"]
     depends_on: [auction-demo-bridge]
     restart: unless-stopped
+    mem_limit: 64m
+    mem_reservation: 16m
+    cpus: 0.25
 
   auction-demo-origin:
     build:
@@ -87,6 +111,9 @@ services:
       - auction-demo-bridge
       - auction-demo-cert
     restart: unless-stopped
+    mem_limit: 128m
+    mem_reservation: 32m
+    cpus: 0.5
 
   # Self-service real certificate (ADR-0003, CADS-Tunnel docs/dns01-desec.md
   # "Self-service agent certificates") -- this tunnel is already Grün, so this
@@ -115,6 +142,12 @@ services:
       - auction_demo_certs_ss:/certs
     command: ["ct-agent", "certificate"]
     restart: unless-stopped
+    # Same ct-agent binary/runtime footprint as auction-demo-agent below -- matched
+    # to that limit rather than the lighter provider tier since an OOM-killed cert
+    # renewal loop is worse than an over-provisioned one (loses HTTPS, not just a demo bid).
+    mem_limit: 128m
+    mem_reservation: 32m
+    cpus: 0.5
 
   auction-demo-agent:
     build:
@@ -155,6 +188,9 @@ services:
       - auction-demo-origin
     command: ["ct-agent", "onboard"]
     restart: unless-stopped
+    mem_limit: 128m
+    mem_reservation: 32m
+    cpus: 0.5
 
 networks:
   default:
