@@ -17,8 +17,19 @@ RUN apt-get update \
 # convention. Keep in sync with compose.auction-demo.yml and
 # compose.auction-demo.selfservice.yml's own CT_AGENT_REF (both the agent
 # and cert service references).
-ARG CT_AGENT_REF=v0.5.7
-RUN git clone https://github.com/scimbe/ct-agent.git /build && cd /build && git checkout "${CT_AGENT_REF}"
+ARG CT_AGENT_REF=v0.7.22
+# Optional gh-token secret (--secret id=gh_token,src=<file>): GitHub's anonymous
+# git-clone rate limit for this host's IP was hit 2026-09-02 (same fix already
+# applied to CADS-cookbook-demo/CADS-DEMO-deutschlandatlas-callcenter/
+# CADS-webconference-demo/CADS-a2a-demo). Falls back to a plain anonymous clone
+# when no secret is passed, so this is a no-op for anyone building without a token.
+RUN --mount=type=secret,id=gh_token \
+    if [ -s /run/secrets/gh_token ]; then \
+      git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $(printf 'x:%s' "$(cat /run/secrets/gh_token)" | base64 -w0)" clone https://github.com/scimbe/ct-agent.git /build; \
+    else \
+      git clone https://github.com/scimbe/ct-agent.git /build; \
+    fi \
+    && cd /build && git checkout "${CT_AGENT_REF}"
 WORKDIR /build
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \

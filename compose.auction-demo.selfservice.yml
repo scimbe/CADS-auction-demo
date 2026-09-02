@@ -127,7 +127,7 @@ services:
       args:
         # Bumped 2026-08-19 to v0.5.7 (CADS-Tunnel#587): the previous pin had
         # silently drifted 77 commits/~6 days behind ct-agent main.
-        - CT_AGENT_REF=${CT_AGENT_REF:-v0.5.7}
+        - CT_AGENT_REF=${CT_AGENT_REF:-v0.7.22}
     environment:
       - CT_AGENT_CP_URL=${AUCTION_AGENT_CP_URL:?control-plane URL}
       - CT_AGENT_TOKEN=${AUCTION_AGENT_TOKEN:?this tunnel's routing token, from the portal Install page}
@@ -160,7 +160,7 @@ services:
         # Bumped 2026-08-19 to v0.5.7 (CADS-Tunnel#587): the previous pin had
         # silently drifted 77 commits/~6 days behind ct-agent main -- pulls in
         # ct-agent#35/#41 (Noise-key attestation).
-        - CT_AGENT_REF=${CT_AGENT_REF:-v0.5.7}
+        - CT_AGENT_REF=${CT_AGENT_REF:-v0.7.22}
     environment:
       - CT_AGENT_MODE=browser
       - CT_AGENT_HOSTNAME=auction-demo.bunsenbrenner.org
