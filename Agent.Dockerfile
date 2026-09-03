@@ -17,7 +17,7 @@ RUN apt-get update \
 # convention. Keep in sync with compose.auction-demo.yml and
 # compose.auction-demo.selfservice.yml's own CT_AGENT_REF (both the agent
 # and cert service references).
-ARG CT_AGENT_REF=v0.7.22
+ARG CT_AGENT_REF=v0.7.24
 # Optional gh-token secret (--secret id=gh_token,src=<file>): GitHub's anonymous
 # git-clone rate limit for this host's IP was hit 2026-09-02 (same fix already
 # applied to CADS-cookbook-demo/CADS-DEMO-deutschlandatlas-callcenter/
