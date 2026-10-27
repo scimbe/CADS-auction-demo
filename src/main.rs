@@ -1,40 +1,37 @@
-//! CADS-auction-demo bridge: a live web dashboard over CADS-Tunnel's REAL
-//! workflow-pipeline auction primitive (`ct_common::pipeline::PipelineSpec::auction_view`,
-//! `convene_with_policy`, `SelectionPolicy`) — not a hardcoded fixture like
-//! `crew_bridge.rs`'s `demo_auction()`. The roster of bidders is real too: each named
-//! provider (`aurora`, `borealis`, ...) is its own genuinely independent OS process
-//! (`auction-demo-provider`, this repo's `src/bin/provider.rs`), holding its own real,
-//! randomly-generated ed25519 identity, signing its own real
-//! `ct_common::channel::CapacityOffer`, and submitting it to `POST /offers/submit` —
-//! which this bridge verifies (`CapacityOffer::is_valid`), never re-signs or trusts
-//! blind. The only thing a visitor can add on top is their own single bid via
-//! `POST /offers/mine`, clearly a visitor-supplied input (like typing a task), not a
-//! fabricated roster of competitors.
+//! CADS-auction-demo bridge: serves the page and runs one REAL tender per visitor request
+//! (`POST /tender`, streamed as Server-Sent Events back to that visitor only):
+//!  1. asks every provider process live for a fresh signed `CapacityOffer` (a real bid),
+//!  2. verifies each offer (`CapacityOffer::is_valid`), applies the visitor's budget,
+//!  3. clears the two-role pipeline with `ct_common::pipeline::PipelineSpec::auction_view`,
+//!  4. dispatches the work to the winners (summary, then review) and verifies that each
+//!     result is signed by the winner's key from its offer.
+//! Nothing is simulated: bids, winners, timings and results all come from the provider
+//! processes. The only artificial thing is a short display pause in the browser.
 
+use auction_demo_bridge::{hex, verify_result, JobReq, JobResp, MAX_TEXT_CHARS};
 use axum::extract::State;
+use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use ct_common::channel::{CapacityKind, CapacityOffer, ServiceType};
+use ct_common::channel::{CapacityOffer, ServiceType};
 use ct_common::pipeline::{PipelineSpec, RequiredRole, SelectionPolicy, SelectionState};
-use ed25519_dalek::SigningKey;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::broadcast;
-use tokio_stream::wrappers::BroadcastStream;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tokio::sync::{mpsc, Semaphore};
+use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
 
-const ROLES: &[&str] = &["reviewer", "writer"];
-/// Hard cap on bidders per role so a public-facing submit endpoint can't be used to
-/// grow the bridge's memory or the auction display without bound.
-const MAX_OFFERS_PER_ROLE: usize = 12;
-const MAX_NAME_LEN: usize = 40;
+const MAX_BUDGET: u64 = 10_000;
+const MAX_CONCURRENT_TENDERS: usize = 4;
+const PROVIDER_TIMEOUT: Duration = Duration::from_secs(3);
+const ROSTER_TTL: Duration = Duration::from_secs(5);
+const DEFAULT_PROVIDERS: &str = "http://auction-demo-provider-aurora:8080,http://auction-demo-provider-borealis:8080,http://auction-demo-provider-cascade:8080,http://auction-demo-provider-delta:8080,http://auction-demo-provider-echo:8080,http://auction-demo-provider-foxtrot:8080";
 
 fn service_for_role(role: &str) -> Option<ServiceType> {
     match role {
@@ -44,12 +41,13 @@ fn service_for_role(role: &str) -> Option<ServiceType> {
     }
 }
 
+/// Step order = role order: write first, then review.
 fn demo_spec() -> PipelineSpec {
     PipelineSpec {
         id: "auction-demo".into(),
         roles: vec![
-            RequiredRole { service: ServiceType::SecurityReview, units: 10, tag: "reviewer".into(), selection_policy: None },
             RequiredRole { service: ServiceType::TextGeneration, units: 20, tag: "writer".into(), selection_policy: None },
+            RequiredRole { service: ServiceType::SecurityReview, units: 10, tag: "reviewer".into(), selection_policy: None },
         ],
         operator_pubkey_hex: None,
         selection_policy: SelectionPolicy::LowestFloor,
@@ -60,229 +58,257 @@ fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-/// A real, independently-signed offer the bridge has accepted: from a genuinely
-/// separate `auction-demo-provider` process (the normal case) or from a visitor's own
-/// `POST /offers/mine` bid. Either way `offer` is a real, already-verified
-/// `CapacityOffer` -- this struct never carries anything the bridge fabricated on
-/// someone else's behalf.
-#[derive(Clone)]
-struct SubmittedOffer {
+fn name_from_url(url: &str) -> String {
+    let host = url.trim_start_matches("http://").split(':').next().unwrap_or(url);
+    host.rsplit('-').next().unwrap_or(host).to_string()
+}
+
+fn parse_policy(s: &str) -> Option<SelectionPolicy> {
+    match s {
+        "lowest_floor" => Some(SelectionPolicy::LowestFloor),
+        "round_robin" => Some(SelectionPolicy::RoundRobin),
+        "least_calls" => Some(SelectionPolicy::LeastCalls),
+        _ => None,
+    }
+}
+
+struct Bridge {
+    spec: PipelineSpec,
+    providers: Vec<String>,
+    selection: Mutex<SelectionState>,
+    slots: Arc<Semaphore>,
+    http: reqwest::Client,
+    roster: Mutex<Option<(Instant, Value)>>,
+}
+
+#[derive(Deserialize)]
+struct Quote {
     display_name: String,
+    role: String,
+    offer: CapacityOffer,
+    #[serde(default)]
+    jobs_done: u64,
+}
+
+struct Bidder {
+    name: String,
+    url: String,
     role: String,
     offer: CapacityOffer,
 }
 
-struct BridgeState {
-    spec: PipelineSpec,
-    /// Keyed by the offer's real holder pubkey so a provider's periodic re-submission
-    /// updates its own entry instead of accumulating duplicates.
-    offers: Mutex<HashMap<[u8; 32], SubmittedOffer>>,
-    selection: Mutex<SelectionState>,
-    tx: broadcast::Sender<String>,
-}
-
-async fn broadcast_event(tx: &broadcast::Sender<String>, ev: Value) {
-    let _ = tx.send(ev.to_string());
-    // Small pacing delay so a human watching the dashboard can actually see each step,
-    // not because the real computation is slow -- it isn't. Disclosed in the README.
-    tokio::time::sleep(std::time::Duration::from_millis(180)).await;
-}
-
 #[derive(Deserialize)]
-struct RunQuery {
+struct TenderReq {
+    text: String,
+    budget: u64,
     #[serde(default)]
     policy: Option<String>,
 }
 
-fn parse_policy(s: Option<&str>) -> SelectionPolicy {
-    match s {
-        Some("round_robin") => SelectionPolicy::RoundRobin,
-        Some("least_calls") => SelectionPolicy::LeastCalls,
-        _ => SelectionPolicy::LowestFloor,
+async fn fetch_quote(http: &reqwest::Client, url: &str, now: u64) -> Result<(Quote, f64), String> {
+    let t0 = Instant::now();
+    let resp = http.post(format!("{url}/quote")).timeout(PROVIDER_TIMEOUT).send().await.map_err(|e| if e.is_timeout() { "timeout".to_string() } else { "unreachable".to_string() })?;
+    if !resp.status().is_success() {
+        return Err(format!("http {}", resp.status().as_u16()));
+    }
+    let q: Quote = resp.json().await.map_err(|_| "bad answer".to_string())?;
+    let ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let expected = service_for_role(&q.role).ok_or("unknown role")?;
+    if q.display_name.trim().is_empty() || q.display_name.len() > 40 {
+        return Err("bad name".into());
+    }
+    if !q.offer.is_valid(now) {
+        return Err("invalid signature".into());
+    }
+    if !q.offer.services.contains(&expected) {
+        return Err("wrong service".into());
+    }
+    Ok((q, ms))
+}
+
+type Tx = mpsc::Sender<Result<Event, Infallible>>;
+
+async fn emit(tx: &Tx, ev: Value) -> Option<()> {
+    tx.send(Ok(Event::default().data(ev.to_string()))).await.ok()
+}
+
+/// Real, data-derived reason why the winner won under the policy that actually cleared.
+fn why(policy: &str, bids: &[ct_common::pipeline::RoleBidView], before: &SelectionState, role: &str, pk_by_name: &HashMap<String, [u8; 32]>, name_by_pk: &HashMap<[u8; 32], String>) -> Value {
+    let Some(w) = bids.iter().find(|b| b.win) else { return json!({"kind": policy}) };
+    match policy {
+        "round_robin" => json!({"kind": "round_robin", "previous": before.round_robin_cursor.get(role).and_then(|pk| name_by_pk.get(pk))}),
+        "least_calls" => json!({"kind": "least_calls", "jobs": pk_by_name.get(&w.who).and_then(|pk| before.served_counts.get(pk)).copied().unwrap_or(0)}),
+        _ => {
+            let next = bids.iter().filter(|b| !b.win).min_by_key(|b| b.price);
+            json!({"kind": "lowest_floor", "next": next.map(|n| json!({"who": n.who, "price": n.price}))})
+        }
     }
 }
 
-/// Snapshot the currently-valid offers (drops anything expired -- real time-bound
-/// state, not a fixture) and build the pubkey->display-name label the real
-/// `auction_view` needs.
-fn live_offers(st: &BridgeState, now: u64) -> (Vec<CapacityOffer>, HashMap<[u8; 32], String>) {
-    let map = st.offers.lock().unwrap_or_else(|e| e.into_inner());
-    let mut offers = Vec::new();
-    let mut labels = HashMap::new();
-    for entry in map.values() {
-        if entry.offer.is_valid(now) {
-            labels.insert(entry.offer.holder_pubkey, entry.display_name.clone());
-            offers.push(entry.offer.clone());
-        }
-    }
-    (offers, labels)
-}
+async fn run_tender(b: Arc<Bridge>, req: TenderReq, policy_name: String, policy: SelectionPolicy, tx: Tx) -> Option<()> {
+    let t_start = Instant::now();
+    let now = now_secs();
+    let job_id = hex(&rand::random::<[u8; 8]>());
+    emit(&tx, json!({"type": "tender", "id": job_id, "budget": req.budget, "policy": policy_name, "providers": b.providers.len()})).await?;
 
-async fn run_handler(State(st): State<Arc<BridgeState>>, axum::extract::Query(q): axum::extract::Query<RunQuery>) -> impl IntoResponse {
-    let policy = parse_policy(q.policy.as_deref());
-    let policy_name = q.policy.unwrap_or_else(|| "lowest_floor".into());
-    let tx = st.tx.clone();
-    let st2 = st.clone();
-    tokio::spawn(async move {
-        broadcast_event(&tx, json!({"type": "round_start", "policy": policy_name})).await;
-        let now = now_secs();
-        let (offers, labels) = live_offers(&st2, now);
-        for o in &offers {
-            let who = labels.get(&o.holder_pubkey).cloned().unwrap_or_else(|| "unknown".into());
-            let role = if o.services.contains(&ServiceType::SecurityReview) { "reviewer" } else { "writer" };
-            broadcast_event(&tx, json!({"type": "bid", "role": role, "who": who, "units": o.units_available, "price": o.min_price})).await;
-        }
-        let label = move |pk: &[u8; 32]| labels.get(pk).cloned().unwrap_or_else(|| "unknown".into());
-        let result = {
-            let mut state = st2.selection.lock().unwrap_or_else(|e| e.into_inner());
-            st2.spec.auction_view(&offers, now, policy, &mut state, label)
-        };
-        match result {
-            Ok(views) => {
-                for v in views {
-                    broadcast_event(
-                        &tx,
-                        json!({"type": "role_cleared", "role": v.role, "bids": v.bids.iter().map(|b| json!({"who": b.who, "units": b.units, "price": b.price, "win": b.win})).collect::<Vec<_>>()}),
-                    )
-                    .await;
+    // 1. live request-for-quote to every provider, concurrently; bids are shown in arrival order.
+    let (qtx, mut qrx) = mpsc::channel::<(String, String, Result<(Quote, f64), String>)>(16);
+    for url in &b.providers {
+        let (http, url, qtx) = (b.http.clone(), url.clone(), qtx.clone());
+        tokio::spawn(async move {
+            let r = fetch_quote(&http, &url, now).await;
+            let _ = qtx.send((name_from_url(&url), url, r)).await;
+        });
+    }
+    drop(qtx);
+    let mut bidders: Vec<Bidder> = Vec::new();
+    while let Some((name, url, r)) = qrx.recv().await {
+        match r {
+            Ok((q, ms)) => {
+                if bidders.iter().any(|x| x.offer.holder_pubkey == q.offer.holder_pubkey) {
+                    continue;
                 }
-                broadcast_event(&tx, json!({"type": "round_done"})).await;
+                emit(&tx, json!({"type": "bid", "role": q.role, "who": q.display_name, "price": q.offer.min_price, "units": q.offer.units_available, "jobs_done": q.jobs_done, "ms": (ms * 10.0).round() / 10.0, "key": &hex(&q.offer.holder_pubkey)[..8]})).await?;
+                bidders.push(Bidder { name: q.display_name, url, role: q.role, offer: q.offer });
             }
-            Err(e) => {
-                broadcast_event(&tx, json!({"type": "round_error", "message": e.to_string()})).await;
+            Err(reason) => {
+                emit(&tx, json!({"type": "no_bid", "who": name, "reason": reason})).await?;
             }
         }
-    });
-    axum::http::StatusCode::ACCEPTED
-}
-
-/// Clears every currently-accepted offer. Real, independently-operated providers
-/// self-heal within their own resubmission interval (`SUBMIT_INTERVAL_SECS`, default
-/// 20s) -- this bridge never re-creates their bids on their behalf.
-async fn reset_handler(State(st): State<Arc<BridgeState>>) -> impl IntoResponse {
-    *st.selection.lock().unwrap_or_else(|e| e.into_inner()) = SelectionState::default();
-    st.offers.lock().unwrap_or_else(|e| e.into_inner()).clear();
-    let _ = st.tx.send(json!({"type": "reset"}).to_string());
-    axum::http::StatusCode::NO_CONTENT
-}
-
-async fn offers_get_handler(State(st): State<Arc<BridgeState>>) -> impl IntoResponse {
-    let now = now_secs();
-    let map = st.offers.lock().unwrap_or_else(|e| e.into_inner());
-    let list: Vec<Value> = map
-        .values()
-        .filter(|e| e.offer.is_valid(now))
-        .map(|e| json!({"role": e.role, "who": e.display_name, "units": e.offer.units_available, "price": e.offer.min_price}))
-        .collect();
-    Json(list)
-}
-
-/// A real, independently-signed offer from a genuinely separate provider process
-/// (`src/bin/provider.rs`) — verified here (`CapacityOffer::is_valid`), never
-/// re-signed or fabricated by this bridge.
-#[derive(Deserialize)]
-struct SubmitReq {
-    display_name: String,
-    role: String,
-    offer: CapacityOffer,
-}
-
-async fn offers_submit_handler(State(st): State<Arc<BridgeState>>, Json(req): Json<SubmitReq>) -> impl IntoResponse {
-    if !ROLES.contains(&req.role.as_str()) {
-        return (axum::http::StatusCode::BAD_REQUEST, format!("unknown role '{}' (must be one of {ROLES:?})", req.role)).into_response();
     }
-    let name = req.display_name.trim();
-    if name.is_empty() || name.len() > MAX_NAME_LEN {
-        return (axum::http::StatusCode::BAD_REQUEST, format!("display_name must be 1..={MAX_NAME_LEN} chars")).into_response();
-    }
-    let now = now_secs();
-    if !req.offer.is_valid(now) {
-        return (axum::http::StatusCode::UNAUTHORIZED, "offer signature does not verify (or is expired) -- rejected, not re-signed").into_response();
-    }
-    let Some(expected_service) = service_for_role(&req.role) else {
-        return (axum::http::StatusCode::BAD_REQUEST, "unreachable: role already validated").into_response();
+
+    // 2. budget: drop bids that cannot be part of ANY plan within the visitor's total budget.
+    let min_of = |role: &str| bidders.iter().filter(|x| x.role == role).map(|x| x.offer.min_price).min();
+    let (Some(min_w), Some(min_r)) = (min_of("writer"), min_of("reviewer")) else {
+        let role = if min_of("writer").is_none() { "writer" } else { "reviewer" };
+        return emit(&tx, json!({"type": "error", "code": "unfilled", "role": role})).await;
     };
-    if !req.offer.services.contains(&expected_service) {
-        return (axum::http::StatusCode::BAD_REQUEST, format!("offer's signed services don't include {expected_service:?} required for role '{}'", req.role)).into_response();
+    if min_w + min_r > req.budget {
+        return emit(&tx, json!({"type": "error", "code": "budget", "need": min_w + min_r, "budget": req.budget})).await;
     }
-    let mut map = st.offers.lock().unwrap_or_else(|e| e.into_inner());
-    let already_here = map.contains_key(&req.offer.holder_pubkey);
-    if !already_here {
-        let count = map.values().filter(|e| e.role == req.role).count();
-        if count >= MAX_OFFERS_PER_ROLE {
-            return (axum::http::StatusCode::TOO_MANY_REQUESTS, format!("at most {MAX_OFFERS_PER_ROLE} bidders per role")).into_response();
+    let mut offers = Vec::new();
+    for x in &bidders {
+        let other_min = if x.role == "writer" { min_r } else { min_w };
+        if x.offer.min_price + other_min > req.budget {
+            emit(&tx, json!({"type": "over_budget", "role": x.role, "who": x.name, "price": x.offer.min_price})).await?;
+        } else {
+            offers.push(x.offer.clone());
         }
     }
-    let holder = req.offer.holder_pubkey;
-    let units = req.offer.units_available;
-    let price = req.offer.min_price;
-    map.insert(holder, SubmittedOffer { display_name: name.to_string(), role: req.role.clone(), offer: req.offer });
-    drop(map);
-    let _ = st.tx.send(json!({"type": "offer_submitted", "role": req.role, "who": name, "units": units, "price": price}).to_string());
-    axum::http::StatusCode::NO_CONTENT.into_response()
-}
 
-/// A visitor's own single bid -- genuine influence over the input (like typing a task),
-/// not a fabricated roster of competitors. Signed server-side with a name-derived key
-/// (so re-submitting the same name updates the same entry) purely because a browser
-/// tab has no ed25519 identity of its own to sign with; every other bidder on the
-/// board is a real, separate process (see `POST /offers/submit`).
-#[derive(Deserialize)]
-struct MineReq {
-    role: String,
-    who: String,
-    units: u64,
-    price: u64,
-}
+    // 3. the real clear.
+    let name_by_pk: HashMap<[u8; 32], String> = bidders.iter().map(|x| (x.offer.holder_pubkey, x.name.clone())).collect();
+    let pk_by_name: HashMap<String, [u8; 32]> = bidders.iter().map(|x| (x.name.clone(), x.offer.holder_pubkey)).collect();
+    let (before, result) = {
+        let mut state = b.selection.lock().unwrap_or_else(|e| e.into_inner());
+        let before = state.clone();
+        let labels = name_by_pk.clone();
+        let r = b.spec.auction_view(&offers, now, policy, &mut state, move |pk| labels.get(pk).cloned().unwrap_or_else(|| "unknown".into()));
+        (before, r)
+    };
+    let views = match result {
+        Ok(v) => v,
+        Err(e) => return emit(&tx, json!({"type": "error", "code": "unfilled", "message": e.to_string()})).await,
+    };
+    let mut winners: Vec<(String, String, String)> = Vec::new(); // (role, winner name, url)
+    let mut total_price = 0u64;
+    for v in &views {
+        let reason = why(&policy_name, &v.bids, &before, &v.role, &pk_by_name, &name_by_pk);
+        let w = v.bids.iter().find(|x| x.win)?;
+        total_price += w.price;
+        let url = bidders.iter().find(|x| x.name == w.who)?.url.clone();
+        winners.push((v.role.clone(), w.who.clone(), url));
+        emit(&tx, json!({"type": "cleared", "role": v.role, "why": reason, "bids": v.bids.iter().map(|x| json!({"who": x.who, "price": x.price, "units": x.units, "win": x.win})).collect::<Vec<_>>()})).await?;
+    }
 
-async fn offers_mine_handler(State(st): State<Arc<BridgeState>>, Json(req): Json<MineReq>) -> impl IntoResponse {
-    if !ROLES.contains(&req.role.as_str()) {
-        return (axum::http::StatusCode::BAD_REQUEST, format!("unknown role '{}' (must be one of {ROLES:?})", req.role)).into_response();
-    }
-    let who = req.who.trim();
-    if who.is_empty() || who.len() > MAX_NAME_LEN {
-        return (axum::http::StatusCode::BAD_REQUEST, format!("name must be 1..={MAX_NAME_LEN} chars")).into_response();
-    }
-    if req.units == 0 {
-        return (axum::http::StatusCode::BAD_REQUEST, "units must be > 0").into_response();
-    }
-    let service = service_for_role(&req.role).expect("role already validated");
-    let mut seed = [0u8; 32];
-    seed.copy_from_slice(&Sha256::digest(format!("visitor:{who}").as_bytes()));
-    let sk = SigningKey::from_bytes(&seed);
-    let now = now_secs();
-    let offer = CapacityOffer::sign_new_with_services(
-        &sk,
-        CapacityKind::CloudApiQuota,
-        vec!["claude".into()],
-        req.units,
-        req.price,
-        "demo-credits".into(),
-        now,
-        now + 10 * 365 * 24 * 3600,
-        vec![service],
-    );
-    let mut map = st.offers.lock().unwrap_or_else(|e| e.into_inner());
-    let already_here = map.contains_key(&offer.holder_pubkey);
-    if !already_here {
-        let count = map.values().filter(|e| e.role == req.role).count();
-        if count >= MAX_OFFERS_PER_ROLE {
-            return (axum::http::StatusCode::TOO_MANY_REQUESTS, format!("at most {MAX_OFFERS_PER_ROLE} bidders per role")).into_response();
+    // 4. execute: writer first, reviewer gets the writer's summary.
+    let mut summary: Option<String> = None;
+    let mut exec_ms = 0.0;
+    for (role, who, url) in &winners {
+        let who = who.clone();
+        emit(&tx, json!({"type": "exec_start", "role": role, "who": who})).await?;
+        let body = JobReq { job_id: job_id.clone(), text: req.text.clone(), summary: summary.clone() };
+        let t0 = Instant::now();
+        let out: Result<(JobResp, f64), String> = async {
+            let r = b.http.post(format!("{url}/job")).json(&body).timeout(PROVIDER_TIMEOUT).send().await.map_err(|_| "unreachable".to_string())?;
+            if !r.status().is_success() {
+                return Err(format!("http {}", r.status().as_u16()));
+            }
+            let jr: JobResp = r.json().await.map_err(|_| "bad answer".to_string())?;
+            Ok((jr, t0.elapsed().as_secs_f64() * 1000.0))
+        }
+        .await;
+        match out {
+            Ok((jr, rtt)) => {
+                let pk = bidders.iter().find(|x| x.url == *url).map(|x| x.offer.holder_pubkey)?;
+                let sig_ok = verify_result(&pk, &job_id, role, &jr.output, &jr.sig_hex);
+                if !sig_ok {
+                    return emit(&tx, json!({"type": "error", "code": "bad_signature", "role": role, "who": who})).await;
+                }
+                exec_ms += jr.ms;
+                if role == "writer" {
+                    summary = jr.output["summary"].as_str().map(str::to_string);
+                }
+                emit(&tx, json!({"type": "exec_done", "role": role, "who": who, "ms": (jr.ms * 1000.0).round() / 1000.0, "rtt_ms": (rtt * 10.0).round() / 10.0, "sig_ok": true, "output": jr.output})).await?;
+            }
+            Err(reason) => return emit(&tx, json!({"type": "error", "code": "exec", "role": role, "who": who, "reason": reason})).await,
         }
     }
-    map.insert(offer.holder_pubkey, SubmittedOffer { display_name: format!("{who} (you)"), role: req.role.clone(), offer });
-    drop(map);
-    let _ = st.tx.send(json!({"type": "offer_submitted", "role": req.role, "who": format!("{who} (you)"), "units": req.units, "price": req.price}).to_string());
-    axum::http::StatusCode::NO_CONTENT.into_response()
+    emit(&tx, json!({"type": "done", "total_price": total_price, "budget": req.budget, "work_ms": (exec_ms * 1000.0).round() / 1000.0, "total_ms": t_start.elapsed().as_millis() as u64})).await
 }
 
-async fn events_handler(State(st): State<Arc<BridgeState>>) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
-    let rx = st.tx.subscribe();
-    let stream = BroadcastStream::new(rx).filter_map(|msg| match msg {
-        Ok(line) => Some(Ok(Event::default().data(line))),
-        Err(_) => None, // a lagging subscriber just misses old events, never errors the stream
+async fn tender_handler(State(b): State<Arc<Bridge>>, Json(req): Json<TenderReq>) -> impl IntoResponse {
+    let text_len = req.text.chars().count();
+    if req.text.trim().is_empty() || text_len > MAX_TEXT_CHARS {
+        return (StatusCode::BAD_REQUEST, format!("text must be 1..={MAX_TEXT_CHARS} chars")).into_response();
+    }
+    if req.budget == 0 || req.budget > MAX_BUDGET {
+        return (StatusCode::BAD_REQUEST, format!("budget must be 1..={MAX_BUDGET}")).into_response();
+    }
+    let policy_name = req.policy.clone().unwrap_or_else(|| "lowest_floor".into());
+    let Some(policy) = parse_policy(&policy_name) else {
+        return (StatusCode::BAD_REQUEST, "unknown policy").into_response();
+    };
+    let Ok(permit) = b.slots.clone().try_acquire_owned() else {
+        return (StatusCode::TOO_MANY_REQUESTS, "busy").into_response();
+    };
+    let (tx, rx) = mpsc::channel(64);
+    tokio::spawn(async move {
+        let _permit = permit;
+        let _ = run_tender(b, req, policy_name, policy, tx).await;
     });
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    Sse::new(ReceiverStream::new(rx).map(|e| e)).keep_alive(KeepAlive::default()).into_response()
+}
+
+/// Live health of every provider (cached a few seconds so the public page cannot hammer them).
+async fn roster_handler(State(b): State<Arc<Bridge>>) -> impl IntoResponse {
+    if let Some((at, v)) = b.roster.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if at.elapsed() < ROSTER_TTL {
+            return Json(v.clone());
+        }
+    }
+    let checks = b.providers.iter().map(|url| {
+        let (http, url) = (b.http.clone(), url.clone());
+        async move {
+            match http.get(format!("{url}/health")).timeout(Duration::from_secs(1)).send().await {
+                Ok(r) if r.status().is_success() => r.json::<Value>().await.map(|v| json!({"name": v["name"], "role": v["role"], "up": true, "jobs_done": v["jobs_done"]})).unwrap_or_else(|_| json!({"name": name_from_url(&url), "up": false})),
+                _ => json!({"name": name_from_url(&url), "up": false}),
+            }
+        }
+    });
+    let list = futures_join(checks).await;
+    let v = json!({"providers": list, "up": list.iter().filter(|p| p["up"] == true).count(), "total": list.len()});
+    *b.roster.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), v.clone()));
+    Json(v)
+}
+
+async fn futures_join<F: std::future::Future<Output = Value> + Send + 'static>(it: impl Iterator<Item = F>) -> Vec<Value> {
+    let handles: Vec<_> = it.map(tokio::spawn).collect();
+    let mut out = Vec::new();
+    for h in handles {
+        out.push(h.await.unwrap_or(json!({"up": false})));
+    }
+    out
 }
 
 const INDEX_HTML: &str = include_str!("../index.html");
@@ -293,27 +319,24 @@ async fn index_handler() -> impl IntoResponse {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let (tx, _rx) = broadcast::channel::<String>(64);
-    let state = Arc::new(BridgeState {
+    let providers: Vec<String> = std::env::var("AUCTION_PROVIDERS").unwrap_or_else(|_| DEFAULT_PROVIDERS.into()).split(',').map(|s| s.trim().trim_end_matches('/').to_string()).filter(|s| !s.is_empty()).collect();
+    let state = Arc::new(Bridge {
         spec: demo_spec(),
-        offers: Mutex::new(HashMap::new()),
+        providers,
         selection: Mutex::new(SelectionState::default()),
-        tx,
+        slots: Arc::new(Semaphore::new(MAX_CONCURRENT_TENDERS)),
+        http: reqwest::Client::builder().build()?,
+        roster: Mutex::new(None),
     });
-
     let app = Router::new()
         .route("/", get(index_handler))
-        .route("/events", get(events_handler))
-        .route("/run", post(run_handler))
-        .route("/reset", post(reset_handler))
-        .route("/offers", get(offers_get_handler))
-        .route("/offers/submit", post(offers_submit_handler))
-        .route("/offers/mine", post(offers_mine_handler))
+        .route("/roster", get(roster_handler))
+        .route("/tender", post(tender_handler))
+        .layer(axum::extract::DefaultBodyLimit::max(16 * 1024))
         .with_state(state);
-
     let addr = std::env::var("AUCTION_BRIDGE_LISTEN").unwrap_or_else(|_| "0.0.0.0:8789".to_string());
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    eprintln!("auction-demo-bridge: serving on {addr} -- waiting for real provider processes to submit offers");
+    eprintln!("auction-demo-bridge: serving on {addr}");
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -321,6 +344,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use ct_common::channel::CapacityKind;
+    use ed25519_dalek::SigningKey;
+    use sha2::{Digest, Sha256};
 
     fn real_offer(seed_input: &str, role: &str, units: u64, price: u64, now: u64) -> CapacityOffer {
         let mut seed = [0u8; 32];

@@ -1,22 +1,32 @@
-//! auction-demo-provider: a genuinely independent bidder process. Generates its OWN
-//! real ed25519 keypair (never touched by the bridge or by any other provider),
-//! signs its OWN real `ct_common::channel::CapacityOffer`, and submits it to the
-//! bridge's `POST /offers/submit`, which verifies the signature server-side
-//! (`CapacityOffer::is_valid`) rather than trusting or re-signing it. Re-submits
-//! periodically so it behaves like a real, live, independently-operated bidder rather
-//! than a one-shot fixture -- one of these runs per named provider in
-//! `compose.auction-demo.yml`, each its own container, never sharing a process or a
-//! private key with the bridge or any other provider.
+//! auction-demo-provider: a genuinely independent bidder AND worker process. It holds its
+//! OWN random ed25519 identity (never shared with the bridge or another provider) and
+//! serves three endpoints on the internal compose network:
+//!   GET  /health -- name, role, public key, jobs done
+//!   POST /quote  -- a freshly signed real `ct_common::channel::CapacityOffer` (the bid)
+//!   POST /job    -- performs the real work (summary or review) and signs the result
+//! The bridge verifies both the offer and the result signature; it never signs for anyone.
 
+use axum::extract::{DefaultBodyLimit, State};
+use axum::http::StatusCode;
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use auction_demo_bridge::{hex, review, sign_result, summarize, JobReq, JobResp, MAX_TEXT_CHARS};
 use ct_common::channel::{CapacityKind, CapacityOffer, ServiceType};
 use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
 use rand::RngCore;
-use serde_json::json;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use serde_json::{json, Value};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-fn env_or(name: &str, default: &str) -> String {
-    std::env::var(name).unwrap_or_else(|_| default.to_string())
+struct Provider {
+    name: String,
+    role: String,
+    units: u64,
+    price: u64,
+    key: SigningKey,
+    jobs_done: AtomicU64,
 }
 
 fn required_env(name: &str) -> String {
@@ -35,59 +45,71 @@ fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+async fn health(State(p): State<Arc<Provider>>) -> Json<Value> {
+    Json(json!({
+        "name": p.name, "role": p.role,
+        "pubkey": hex(&p.key.verifying_key().to_bytes()),
+        "jobs_done": p.jobs_done.load(Ordering::Relaxed),
+    }))
+}
+
+async fn quote(State(p): State<Arc<Provider>>) -> Json<Value> {
+    let now = now_secs();
+    // Short validity: a quote is a live bid for this tender, not a standing fixture.
+    let offer = CapacityOffer::sign_new_with_services(
+        &p.key,
+        CapacityKind::CloudApiQuota,
+        vec!["claude".into()],
+        p.units,
+        p.price,
+        "demo-credits".into(),
+        now,
+        now + 300,
+        vec![service_for_role(&p.role)],
+    );
+    Json(json!({
+        "display_name": p.name, "role": p.role, "offer": offer,
+        "jobs_done": p.jobs_done.load(Ordering::Relaxed),
+    }))
+}
+
+async fn job(State(p): State<Arc<Provider>>, Json(req): Json<JobReq>) -> Result<Json<JobResp>, (StatusCode, String)> {
+    if req.text.chars().count() > MAX_TEXT_CHARS || req.job_id.is_empty() || req.job_id.len() > 64 {
+        return Err((StatusCode::BAD_REQUEST, "bad job".into()));
+    }
+    let t0 = Instant::now();
+    let output = match p.role.as_str() {
+        "writer" => summarize(&req.text),
+        "reviewer" => review(&req.text, req.summary.as_deref().ok_or((StatusCode::BAD_REQUEST, "summary required".to_string()))?),
+        _ => return Err((StatusCode::INTERNAL_SERVER_ERROR, "role".into())),
+    };
+    let ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let sig_hex = sign_result(&p.key, &req.job_id, &p.role, &output);
+    p.jobs_done.fetch_add(1, Ordering::Relaxed);
+    Ok(Json(JobResp { output, sig_hex, ms }))
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let name = required_env("PROVIDER_NAME");
     let role = required_env("PROVIDER_ROLE");
+    let _ = service_for_role(&role);
     let units: u64 = required_env("PROVIDER_UNITS").parse().expect("PROVIDER_UNITS must be a number");
     let price: u64 = required_env("PROVIDER_PRICE").parse().expect("PROVIDER_PRICE must be a number");
-    let bridge_url = required_env("BRIDGE_URL");
-    let interval_secs: u64 = env_or("SUBMIT_INTERVAL_SECS", "20").parse().unwrap_or(20);
-    let service = service_for_role(&role);
-
-    // A real, random identity -- generated once at process start, held only in this
-    // process's memory, never derived from `name` and never shared with the bridge or
-    // any other provider. Same OsRng-seeded pattern ct-agent's own `channel init` uses.
+    let listen = std::env::var("PROVIDER_LISTEN").unwrap_or_else(|_| "0.0.0.0:8080".into());
+    // A real, random identity -- generated once at process start, held only in this process.
     let mut seed = [0u8; 32];
     OsRng.fill_bytes(&mut seed);
-    let signing_key = SigningKey::from_bytes(&seed);
-    let holder_pubkey = signing_key.verifying_key().to_bytes();
-    eprintln!(
-        "auction-demo-provider[{name}]: real identity {} (role={role}, units={units}, price={price})",
-        hex(&holder_pubkey)
-    );
-
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(10)).build()?;
-
-    loop {
-        let now = now_secs();
-        let offer = CapacityOffer::sign_new_with_services(
-            &signing_key,
-            CapacityKind::CloudApiQuota,
-            vec!["claude".into()],
-            units,
-            price,
-            "demo-credits".into(),
-            now,
-            now + 10 * 365 * 24 * 3600,
-            vec![service],
-        );
-        let body = json!({"display_name": name, "role": role, "offer": offer});
-        match client.post(format!("{bridge_url}/offers/submit")).json(&body).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                eprintln!("auction-demo-provider[{name}]: submitted a real signed offer to {bridge_url}");
-            }
-            Ok(resp) => {
-                eprintln!("auction-demo-provider[{name}]: bridge rejected the offer: HTTP {}", resp.status());
-            }
-            Err(e) => {
-                eprintln!("auction-demo-provider[{name}]: could not reach the bridge yet: {e}");
-            }
-        }
-        tokio::time::sleep(Duration::from_secs(interval_secs)).await;
-    }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    let key = SigningKey::from_bytes(&seed);
+    eprintln!("auction-demo-provider[{name}]: identity {} (role={role}, units={units}, price={price}) listening on {listen}", hex(&key.verifying_key().to_bytes()));
+    let p = Arc::new(Provider { name, role, units, price, key, jobs_done: AtomicU64::new(0) });
+    let app = Router::new()
+        .route("/health", get(health))
+        .route("/quote", post(quote))
+        .route("/job", post(job))
+        .layer(DefaultBodyLimit::max(16 * 1024))
+        .with_state(p);
+    let listener = tokio::net::TcpListener::bind(&listen).await?;
+    axum::serve(listener, app).await?;
+    Ok(())
 }

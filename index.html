@@ -1,375 +1,297 @@
 <!doctype html>
-<html lang="en">
+<html lang="de">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CADS-auction-demo — live workflow-pipeline auction</title>
+<title>Auftrag ausschreiben</title>
+<meta name="description" content="Sechs unabhängige Anbieter bieten live auf deinen Auftrag. Ein echter Auktions-Algorithmus vergibt ihn und du siehst warum.">
 <style>
  :root{
-  --bg:#0c111d; --panel:#141b2c; --panel2:#1a2338; --line:#2a3450; --line-soft:#212a41;
-  --text:#eef1f7; --muted:#8a93ad; --muted2:#c3c9db;
-  --accent:#d98a4f; --accent-soft:#a8683a; --accent2:#5fb8ab;
-  --win:#5fb8ab; --danger:#e5654f;
-  --mono:ui-monospace,SFMono-Regular,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
-  --serif:ui-serif,Georgia,"Iowan Old Style","Palatino Linotype",serif;
+  --bg:#0c111d; --panel:#141b2c; --panel2:#1a2338; --line:#2a3450;
+  --text:#eef1f7; --muted:#a3abc2; --accent:#d98a4f; --on-accent:#20130a; --ok:#5fb8ab; --warn:#e8b04f; --bar:#3a4668; --bar-win:#5fb8ab;
  }
  @media (prefers-color-scheme: light){
-  :root{
-   --bg:#f5f7fb; --panel:#ffffff; --panel2:#eef1f8; --line:#d7deec; --line-soft:#e3e8f3;
-   --text:#131a2c; --muted:#5b6478; --muted2:#333d54;
-   --accent:#b8672f; --accent-soft:#8f4f24; --accent2:#2f8a7d; --win:#2f8a7d;
-  }
+  :root{ --bg:#f5f7fb; --panel:#fff; --panel2:#eef1f8; --line:#c9d1e3; --text:#131a2c; --muted:#4d566b; --accent:#b8672f; --on-accent:#fff; --ok:#1f6f63; --warn:#8a5a00; --bar:#b9c3dc; --bar-win:#2f8a7d; }
  }
  *{box-sizing:border-box}
- body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased}
- a{color:var(--accent2)}
- code{font-family:var(--mono);background:var(--panel2);padding:.1rem .35rem;border-radius:4px;font-size:.85em}
- h1,h2,h3{font-family:var(--serif);font-weight:600;letter-spacing:-.01em;margin:0}
-
- header.hero{border-bottom:1px solid var(--line);
-  background-image:linear-gradient(var(--line-soft) 1px, transparent 1px),linear-gradient(90deg, var(--line-soft) 1px, transparent 1px);
-  background-size:34px 34px}
- .hero-inner,main,footer.site-footer .footer-inner{max-width:62rem;margin:0 auto;padding:0 1.5rem}
- header.hero .hero-inner{padding-top:2.2rem;padding-bottom:2.4rem}
- .brand{font-family:var(--serif);font-size:1rem;color:var(--muted);display:flex;align-items:center;gap:.5rem;margin-bottom:1.3rem}
- .brand .flame{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px rgba(217,138,79,.22)}
- .brand a{color:var(--muted2);text-decoration:none}
- .brand a:hover{text-decoration:underline}
-
- .eyebrow{font-family:var(--mono);font-size:.76rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent2);
-  display:flex;align-items:center;gap:.5rem;margin:0 0 1.05rem}
- .eyebrow::before{content:"";width:1.4rem;height:1px;background:var(--accent2)}
- h1{font-size:clamp(1.6rem,3.4vw,2.15rem);line-height:1.2;margin-bottom:.85rem}
- .lede{font-size:1rem;color:var(--muted2);max-width:44rem;margin:0}
-
- .callout{background:var(--panel);border:1px solid var(--line);border-left:2px solid var(--accent2);border-radius:8px;
-  padding:1.05rem 1.25rem;font-size:.9rem;color:var(--muted2);margin-top:1.5rem}
- .callout b{color:var(--text)}
-
- main{padding-top:2.4rem;padding-bottom:3rem}
- h2.section-title{font-size:1.08rem;margin-bottom:.6rem}
-
- .lanes{display:grid;grid-template-columns:1fr;gap:1rem;margin-bottom:1.6rem}
- @media (min-width:760px){ .lanes{grid-template-columns:1fr 1fr} }
- .diagram-card{border:1px solid var(--line);border-radius:12px;background:var(--panel);overflow:hidden}
- .diagram-head{display:flex;justify-content:space-between;align-items:center;padding:.75rem .95rem;
-  border-bottom:1px solid var(--line);font-family:var(--mono);font-size:.7rem;color:var(--muted)}
- .diagram-head .live{display:flex;align-items:center;gap:.4rem;color:var(--accent2)}
- .diagram-head .live i{width:6px;height:6px;border-radius:50%;background:var(--accent2);display:inline-block;
-  animation:pulse 1.6s ease-in-out infinite;font-style:normal}
- @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
- canvas.lane-canvas{display:block;width:100%;height:190px}
- .diagram-foot{display:flex;justify-content:space-between;padding:.6rem .95rem;border-top:1px solid var(--line);
-  font-family:var(--mono);font-size:.68rem;color:var(--muted)}
- @media (prefers-reduced-motion: reduce){ .diagram-head .live i{animation:none} }
-
- .add-bid{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:1.1rem 1.3rem;margin-bottom:1.6rem}
- .add-bid-sub{color:var(--muted);font-size:.85rem;margin-bottom:.8rem}
- #mine-row{display:grid;grid-template-columns:0.9fr 1.1fr 0.7fr 0.7fr auto;gap:.5rem;align-items:center}
- #mine-row select,#mine-row input{font:inherit;background:var(--bg);border:1px solid var(--line);color:var(--text);
-  border-radius:6px;padding:.5rem .7rem;width:100%}
- #mine-row select:focus,#mine-row input:focus{outline:none;border-color:var(--accent2)}
-
- .controls{display:flex;flex-wrap:wrap;gap:.6rem;align-items:center;margin:0 0 1rem}
- .policy-group{display:flex;gap:.3rem;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:.25rem}
- .policy-btn{font:inherit;border:0;border-radius:6px;padding:.5rem .9rem;cursor:pointer;background:transparent;color:var(--muted);font-size:.87rem}
- .policy-btn.active{background:var(--accent-soft);color:#fff}
- a.btn,.action-btn{display:inline-flex;align-items:center;gap:.4rem;border:1px solid transparent;border-radius:6px;
-  padding:.55rem 1.05rem;font-weight:600;font-size:.87rem;cursor:pointer;text-decoration:none;transition:filter .15s ease,transform .15s ease}
- .action-btn.primary{background:var(--accent);color:#20130a}
- .action-btn.primary:hover{filter:brightness(1.08);transform:translateY(-1px)}
- .action-btn.ghost{background:transparent;color:var(--muted2);border-color:var(--line)}
- .action-btn.ghost:hover{background:var(--panel2);border-color:var(--muted)}
- .status{font-family:var(--mono);font-size:.83rem;color:var(--muted);min-height:1.2em;margin-bottom:1rem}
-
- footer.site-footer{border-top:1px solid var(--line);padding:1.8rem 1.5rem;margin-top:1rem}
- footer.site-footer .foot{color:var(--muted);font-size:.82rem;max-width:40rem}
- footer.site-footer a{text-decoration:none;color:var(--muted2)}
- footer.site-footer a:hover{text-decoration:underline}
+ body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+ .wrap{max-width:44rem;margin:0 auto;padding:1rem 1rem 3rem}
+ .top{display:flex;justify-content:space-between;align-items:center;gap:.5rem;color:var(--muted);font-size:.9rem}
+ .lang button{font:inherit;background:none;border:1px solid var(--line);color:var(--muted);padding:.35rem .7rem;min-height:2.5rem;min-width:2.75rem;cursor:pointer}
+ .lang button:first-child{border-radius:6px 0 0 6px}.lang button:last-child{border-radius:0 6px 6px 0;border-left:0}
+ .lang button[aria-pressed=true]{background:var(--panel2);color:var(--text);font-weight:600}
+ h1{font-size:clamp(1.5rem,6vw,2rem);line-height:1.2;margin:1.2rem 0 .4rem}
+ .sub{margin:0;color:var(--muted)}
+ .chip{display:inline-flex;align-items:center;gap:.4rem;margin-top:.8rem;font-size:.9rem;color:var(--muted)}
+ .dot{width:.6rem;height:.6rem;border-radius:50%;background:var(--muted)}
+ .chip.up .dot{background:var(--ok)}
+ form,.step,.final,.err{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:1rem;margin-top:1.2rem}
+ label,legend{display:block;font-weight:600;margin-bottom:.3rem}
+ textarea,input[type=number]{width:100%;font:inherit;color:var(--text);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:.6rem .7rem}
+ textarea{min-height:8.5rem;resize:vertical}
+ .row{display:flex;gap:1rem;align-items:end;flex-wrap:wrap;margin-top:.9rem}
+ .row .f{flex:0 0 8rem}
+ button.go{font:inherit;font-weight:700;background:var(--accent);color:var(--on-accent);border:0;border-radius:8px;padding:.8rem 1.2rem;min-height:2.75rem;cursor:pointer;flex:1 1 12rem}
+ button.go[disabled]{opacity:.6;cursor:progress}
+ :focus-visible{outline:3px solid var(--ok);outline-offset:2px}
+ details{margin-top:.9rem;color:var(--muted);font-size:.92rem}
+ summary{cursor:pointer;min-height:2.5rem;display:flex;align-items:center}
+ details label{display:flex;gap:.5rem;align-items:center;font-weight:400;margin:0;min-height:2.5rem;color:var(--text)}
+ fieldset{border:0;margin:0;padding:0}
+ .step h2{font-size:1.05rem;margin:0 0 .6rem}
+ .step h2 span{color:var(--muted);font-weight:400}
+ ul.bids{list-style:none;margin:0;padding:0;display:grid;gap:.5rem}
+ .bid{border:1px solid var(--line);border-radius:8px;padding:.55rem .7rem;opacity:0;transform:translateY(6px);transition:opacity .3s,transform .3s}
+ .bid.in{opacity:1;transform:none}
+ .bid .l1{display:flex;justify-content:space-between;gap:.5rem;font-weight:600}
+ .bid .meta{font-size:.82rem;color:var(--muted)}
+ .bar{height:.5rem;border-radius:4px;background:var(--panel2);margin:.35rem 0;overflow:hidden}
+ .bar i{display:block;height:100%;width:0;background:var(--bar);transition:width .5s}
+ .bid.win{border-color:var(--ok);border-width:2px;background:var(--panel2)}
+ .bid.win .bar i{background:var(--bar-win)}
+ .bid.lose{opacity:.65}
+ .bid.out{opacity:.5}.bid.out .l1 b{text-decoration:line-through}
+ .badge{color:var(--ok);font-weight:700}
+ .why{margin:.7rem 0 0;font-weight:600}
+ .exec{margin-top:.7rem;border-top:1px dashed var(--line);padding-top:.6rem;font-size:.95rem}
+ blockquote{margin:.4rem 0;padding:.4rem .8rem;border-left:3px solid var(--ok);background:var(--panel2);border-radius:0 6px 6px 0}
+ .checks{list-style:none;margin:.3rem 0;padding:0}.checks li{margin:.15rem 0}
+ .ok{color:var(--ok);font-weight:700}.hint{color:var(--warn);font-weight:700}
+ .sig{font-size:.85rem;color:var(--muted)}
+ .final{border-color:var(--ok)}.final p{margin:.2rem 0}
+ .err{border-color:var(--warn)}
+ .nobid{color:var(--muted);font-size:.9rem;margin:.4rem 0 0}
+ footer{margin-top:2rem;color:var(--muted);font-size:.85rem}
+ footer a{color:inherit}
+ .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+ @media (prefers-reduced-motion: reduce){ .bid,.bar i{transition:none} }
 </style>
 </head>
 <body>
-<header class="hero">
- <div class="hero-inner">
-  <div class="brand"><span class="flame"></span><a href="https://bunsenbrenner.org/">Bunsenbrenner.org</a><span>/ auction-demo</span></div>
-  <div class="eyebrow">Workflow-pipeline auction &middot; live, real bidders</div>
-  <h1>Six real processes bid; one real algorithm clears</h1>
-  <p class="lede">
-   Watching <code>ct_common::pipeline::PipelineSpec::auction_view</code> — CADS-Tunnel's real,
-   tested per-role clearing algorithm — run live in the browser over offers submitted by six
-   genuinely independent bidder processes.
-  </p>
-  <div class="callout">
-   <b>What's real:</b> every bidder below is its own genuinely independent process
-   (<code>auction-demo-provider</code>, one per container) holding its own randomly-generated
-   ed25519 identity, signing its own real <code>ct_common::channel::CapacityOffer</code>, and
-   submitting it to this bridge — which verifies the signature
-   (<code>CapacityOffer::is_valid</code>) rather than trusting or fabricating it. The auction
-   algorithm (<code>convene_with_policy</code>/<code>auction_view</code>) runs live on exactly
-   those verified offers. You can add one bid of your own too. <b>What's simulated:</b> nothing
-   about the bidders, the signatures, or the clearing — the only thing generated per round is a
-   visitor's own optional bid.
-  </div>
- </div>
-</header>
-<main>
- <h2 class="section-title">Live bidder board</h2>
- <div class="lanes">
-  <div class="diagram-card">
-   <div class="diagram-head">
-    <span>REVIEWER &middot; SecurityReview, 10 units</span>
-    <span class="live" id="live-reviewer"><i></i>live</span>
-   </div>
-   <canvas class="lane-canvas" id="stage-reviewer" width="440" height="190" aria-label="Diagram: real reviewer bidders converging on the auction, with the winner highlighted after a round."></canvas>
-   <div class="diagram-foot"><span id="foot-reviewer">waiting for real bidders…</span><span>lowest floor wins</span></div>
-  </div>
-  <div class="diagram-card">
-   <div class="diagram-head">
-    <span>WRITER &middot; TextGeneration, 20 units</span>
-    <span class="live" id="live-writer"><i></i>live</span>
-   </div>
-   <canvas class="lane-canvas" id="stage-writer" width="440" height="190" aria-label="Diagram: real writer bidders converging on the auction, with the winner highlighted after a round."></canvas>
-   <div class="diagram-foot"><span id="foot-writer">waiting for real bidders…</span><span>lowest floor wins</span></div>
-  </div>
- </div>
+<div class="wrap">
+ <div class="top"><span>Bunsenbrenner.org / auction-demo</span>
+  <span class="lang" role="group" aria-label="Sprache / Language"><button type="button" data-l="de" aria-pressed="true">DE</button><button type="button" data-l="en" aria-pressed="false">EN</button></span></div>
+ <h1 data-t="h1"></h1>
+ <p class="sub" data-t="sub"></p>
+ <div class="chip" id="chip" role="status"><span class="dot" aria-hidden="true"></span><span id="chip-t"></span></div>
 
- <div class="add-bid">
-  <h3 style="font-size:.95rem;margin-bottom:.3rem">Add your own bid</h3>
-  <div class="add-bid-sub">Signed server-side with your name — a real, single, visitor-supplied offer, not a fabricated roster.</div>
-  <div id="mine-row">
-   <select class="f-role"><option value="reviewer">reviewer</option><option value="writer">writer</option></select>
-   <input type="text" class="f-who" placeholder="your name" maxlength="40">
-   <input type="number" class="f-units" value="10" min="1">
-   <input type="number" class="f-price" value="10" min="0">
-   <button class="action-btn ghost" id="mine-submit">submit</button>
+ <form id="form">
+  <label for="text" data-t="task"></label>
+  <textarea id="text" maxlength="2000" required></textarea>
+  <div class="row">
+   <div class="f"><label for="budget" data-t="budget"></label><input id="budget" type="number" min="1" max="10000" value="100" inputmode="numeric" required></div>
+   <button class="go" id="go" type="submit" data-t="go"></button>
   </div>
- </div>
+  <details><summary data-t="rule"></summary>
+   <fieldset><legend class="sr" data-t="rule"></legend>
+    <label><input type="radio" name="policy" value="lowest_floor" checked><span data-t="p_lowest_floor"></span></label>
+    <label><input type="radio" name="policy" value="round_robin"><span data-t="p_round_robin"></span></label>
+    <label><input type="radio" name="policy" value="least_calls"><span data-t="p_least_calls"></span></label>
+   </fieldset></details>
+ </form>
 
- <div class="controls">
-  <div class="policy-group" id="policy-group">
-   <button class="policy-btn active" data-policy="lowest_floor">Lowest Floor</button>
-   <button class="policy-btn" data-policy="round_robin">Round Robin</button>
-   <button class="policy-btn" data-policy="least_calls">Least Calls</button>
-  </div>
-  <button class="action-btn primary" id="run-btn">Run auction round</button>
-  <button class="action-btn ghost" id="reset-btn">Reset board</button>
- </div>
- <div class="status" id="status"></div>
-</main>
-<footer class="site-footer">
- <div class="footer-inner">
-  <div class="foot">
-   Source: <a href="https://github.com/scimbe/CADS-auction-demo">scimbe/CADS-auction-demo</a>.
-   Auction primitive lives in <a href="https://github.com/scimbe/CADS-Tunnel">scimbe/CADS-Tunnel</a>
-   (<code>crates/common/src/pipeline.rs</code>).
-  </div>
- </div>
-</footer>
+ <div id="out" aria-live="polite"></div>
+
+ <footer>
+  <details><summary data-t="real"></summary><p data-t="real_body"></p></details>
+  <p><a href="https://github.com/scimbe/CADS-auction-demo">GitHub</a></p>
+ </footer>
+</div>
 <script>
 (() => {
-  const statusEl = document.getElementById("status");
-  const policyGroup = document.getElementById("policy-group");
-  let policy = "lowest_floor";
-
-  policyGroup.addEventListener("click", (e) => {
-    const btn = e.target.closest(".policy-btn");
-    if (!btn) return;
-    policy = btn.dataset.policy;
-    [...policyGroup.children].forEach((b) => b.classList.toggle("active", b === btn));
-  });
-
-  // --- one lane diagram per role: N real bidder nodes -> a hub -> an outcome node.
-  // Same node/edge/packet rendering approach as bunsenbrenner.org's own landing-page
-  // diagrams; rebuilt whenever the real board changes, packets fire only on real events.
-  function makeLane(canvasId, role) {
-    const c = document.getElementById(canvasId);
-    const ctx = c.getContext("2d");
-    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
-    function resize() {
-      const r = c.getBoundingClientRect();
-      c.width = r.width * devicePixelRatio; c.height = r.height * devicePixelRatio;
-      ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
-    }
-    window.addEventListener("resize", resize);
-    resize();
-
-    let bidders = []; // [{who, units, price}]
-    let winner = null;
-    let packets = []; // { from: {x,y}, to: {x,y}, t0, duration, color }
-
-    function layout(w, h) {
-      const hubX = w * 0.58, outX = w * 0.9, bidX = w * 0.12;
-      const n = Math.max(bidders.length, 1);
-      const nodes = {};
-      bidders.forEach((b, i) => {
-        nodes["bid:" + b.who] = { x: bidX, y: h * ((i + 1) / (n + 1)), label: b.who };
-      });
-      nodes["hub"] = { x: hubX, y: h / 2, label: role };
-      nodes["out"] = { x: outX, y: h / 2, label: winner || "?" };
-      return nodes;
-    }
-
-    function pulseTo(who) {
-      const w = c.getBoundingClientRect().width, h = c.getBoundingClientRect().height;
-      const nodes = layout(w, h);
-      const from = nodes["bid:" + who], to = nodes["hub"];
-      if (!from || !to) return;
-      packets.push({ from, to, t0: performance.now(), duration: 700, color: "accent2" });
-    }
-
-    function pulseWin() {
-      const w = c.getBoundingClientRect().width, h = c.getBoundingClientRect().height;
-      const nodes = layout(w, h);
-      packets.push({ from: nodes["hub"], to: nodes["out"], t0: performance.now(), duration: 700, color: "accent" });
-    }
-
-    function draw() {
-      const r = c.getBoundingClientRect(); const w = r.width, h = r.height;
-      ctx.clearRect(0, 0, w, h);
-      const line = cssVar("--line"), muted = cssVar("--muted"), text = cssVar("--text"),
-            accent = cssVar("--accent"), accent2 = cssVar("--accent2"), panel = cssVar("--panel"), win = cssVar("--win");
-      const nodes = layout(w, h);
-      const bidKeys = Object.keys(nodes).filter((k) => k.startsWith("bid:"));
-      bidKeys.forEach((k) => {
-        const a = nodes[k], b = nodes["hub"];
-        ctx.strokeStyle = line; ctx.globalAlpha = 0.7; ctx.lineWidth = 1.4;
-        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-        ctx.globalAlpha = 1;
-      });
-      ctx.strokeStyle = line; ctx.lineWidth = 1.4;
-      ctx.beginPath(); ctx.moveTo(nodes["hub"].x, nodes["hub"].y); ctx.lineTo(nodes["out"].x, nodes["out"].y); ctx.stroke();
-
-      bidKeys.forEach((k) => {
-        const p = nodes[k], who = k.slice(4);
-        const isWinner = winner === who;
-        ctx.beginPath(); ctx.arc(p.x, p.y, isWinner ? 7 : 5.5, 0, Math.PI * 2);
-        ctx.fillStyle = panel; ctx.fill();
-        ctx.lineWidth = 2; ctx.strokeStyle = isWinner ? win : muted; ctx.stroke();
-        ctx.font = (isWinner ? "600 " : "") + "10px " + (cssVar("--mono") || "monospace");
-        ctx.fillStyle = isWinner ? text : muted; ctx.textAlign = "left";
-        ctx.fillText(who, p.x + 11, p.y + 3);
-      });
-      const hub = nodes["hub"];
-      ctx.beginPath(); ctx.arc(hub.x, hub.y, 9, 0, Math.PI * 2);
-      ctx.fillStyle = panel; ctx.fill();
-      ctx.lineWidth = 2; ctx.strokeStyle = accent2; ctx.stroke();
-      ctx.font = "10px " + (cssVar("--mono") || "monospace");
-      ctx.fillStyle = text; ctx.textAlign = "center";
-      ctx.fillText("auction", hub.x, hub.y - 15);
-
-      const out = nodes["out"];
-      ctx.beginPath(); ctx.arc(out.x, out.y, 8, 0, Math.PI * 2);
-      ctx.fillStyle = panel; ctx.fill();
-      ctx.lineWidth = 2; ctx.strokeStyle = winner ? win : muted; ctx.stroke();
-      ctx.font = "600 10px " + (cssVar("--mono") || "monospace");
-      ctx.fillStyle = winner ? text : muted; ctx.textAlign = "center";
-      ctx.fillText(winner || "winner", out.x, out.y - 15);
-
-      const now = performance.now();
-      packets = packets.filter((pk) => now - pk.t0 < pk.duration);
-      packets.forEach((pk) => {
-        const pos = reduce ? 1 : Math.min((now - pk.t0) / pk.duration, 1);
-        const px = pk.from.x + (pk.to.x - pk.from.x) * pos, py = pk.from.y + (pk.to.y - pk.from.y) * pos;
-        const col = pk.color === "accent" ? accent : accent2;
-        ctx.beginPath(); ctx.arc(px, py, 3.5, 0, Math.PI * 2);
-        ctx.fillStyle = col; ctx.shadowColor = col; ctx.shadowBlur = 8; ctx.fill(); ctx.shadowBlur = 0;
-      });
-      requestAnimationFrame(draw);
-    }
-    draw();
-
-    return {
-      setBidders(list) { bidders = list; },
-      pulseTo,
-      setWinner(who) { winner = who; if (who) pulseWin(); },
-      clearWinner() { winner = null; },
-    };
+ const T = {
+  de: {
+   h1: "Wer erledigt deinen Auftrag am besten?",
+   sub: "Sechs unabhängige Anbieter bieten live. Der Algorithmus vergibt – du siehst warum.",
+   task: "Dein Auftrag: Text kürzen und gegenlesen lassen", budget: "Budget (Credits)", go: "Auftrag ausschreiben", going: "Läuft …",
+   rule: "Auswahlregel ändern", p_lowest_floor: "Günstigster Preis", p_round_robin: "Reihum (fair verteilt)", p_least_calls: "Wenigste Aufträge bisher",
+   online: (u, n) => `${u} von ${n} Anbietern online`, offline: "Anbieter nicht erreichbar",
+   step_writer: "Schreiben", step_reviewer: "Prüfen", cr: "Credits", done_n: (n) => `${n} erledigt`,
+   asking: "Anbieter werden angefragt …", over: "über Budget", nobid: (w, r) => `${w}: keine Antwort (${r})`, win: "Gewinner",
+   w_lowest_floor: (w, c, nx) => nx ? `${w} gewinnt: am günstigsten (${c} statt ${nx.price} bei ${nx.who}).` : `${w} gewinnt: einziger Bieter.`,
+   w_round_robin: (w, p) => p ? `${w} ist dran: Reihum nach ${p}.` : `${w} ist dran: Reihum beginnt hier.`,
+   w_least_calls: (w, j) => `${w} gewinnt: bisher am wenigsten Aufträge (${j}).`,
+   works: (w) => `${w} arbeitet …`, summary: "Kurzfassung", words: (a, b) => `${a} → ${b} Wörter`,
+   c_short: (p) => `Kürzer um ${p} %`, c_short_bad: "Nicht kürzer als das Original",
+   c_num: "Alle Zahlen übernommen", c_num_bad: (l) => `Zahl fehlt in der Kurzfassung: ${l}`,
+   c_len: (n) => `Sätze kurz genug (längster: ${n} Wörter)`, c_len_bad: (n) => `Ein Satz ist lang (${n} Wörter)`,
+   verdict_ok: "Prüfbericht: in Ordnung", verdict_hint: "Prüfbericht: mit Hinweisen", signed: (w) => `Ergebnis von ${w} signiert, Signatur geprüft`,
+   fin: (p, b) => `Fertig: ${p} von ${b} Credits.`, fin2: (w, t) => `Rechenzeit der Gewinner ${w} ms, gesamt ${t} ms.`,
+   e_budget: (n, b) => `Mit ${b} Credits geht es nicht: das günstigste Gespann kostet ${n}.`, e_unfilled: (r) => `Für „${r}“ hat gerade niemand geboten.`,
+   e_busy: "Gerade ist viel los. Bitte gleich noch einmal.", e_net: "Verbindung unterbrochen.", e_exec: (w) => `${w} konnte nicht liefern.`, e_sig: (w) => `Signatur von ${w} ungültig, Ergebnis verworfen.`,
+   real: "Wie echt ist das?",
+   real_body: "Jeder Anbieter ist ein eigener Prozess mit eigenem Schlüssel und signiert sein Gebot. Den Gewinner bestimmt CADS-Tunnel (ct_common::pipeline, auction_view). Gewichtet wird nur, was der Algorithmus kennt: Preis, Reihum oder bisherige Aufträge. Der Gewinner führt den Auftrag wirklich aus und signiert das Ergebnis. Die kurze Pause zwischen den Karten ist nur Anzeige.",
+   sample: "Die Stadt baut bis 2030 am Hafen 1200 neue Wohnungen. Die Wohnungen sollen auch Menschen mit kleinem Einkommen offenstehen. Gestern war das Wetter schön und viele Menschen gingen spazieren. Für die Wohnungen investiert die Stadt 45 Millionen Euro. Ein Drittel der Wohnungen soll sozial gefördert werden."
+  },
+  en: {
+   h1: "Who should do your job?",
+   sub: "Six independent providers bid live. The algorithm awards it – and you see why.",
+   task: "Your job: shorten a text and have it proofread", budget: "Budget (credits)", go: "Put job out to tender", going: "Running …",
+   rule: "Change selection rule", p_lowest_floor: "Lowest price", p_round_robin: "Round robin (fair turns)", p_least_calls: "Fewest jobs so far",
+   online: (u, n) => `${u} of ${n} providers online`, offline: "Providers unreachable",
+   step_writer: "Write", step_reviewer: "Review", cr: "credits", done_n: (n) => `${n} done`,
+   asking: "Asking the providers …", over: "over budget", nobid: (w, r) => `${w}: no answer (${r})`, win: "Winner",
+   w_lowest_floor: (w, c, nx) => nx ? `${w} wins: lowest price (${c} instead of ${nx.price} from ${nx.who}).` : `${w} wins: only bidder.`,
+   w_round_robin: (w, p) => p ? `${w}'s turn: round robin after ${p}.` : `${w}'s turn: round robin starts here.`,
+   w_least_calls: (w, j) => `${w} wins: fewest jobs so far (${j}).`,
+   works: (w) => `${w} is working …`, summary: "Short version", words: (a, b) => `${a} → ${b} words`,
+   c_short: (p) => `${p}% shorter`, c_short_bad: "Not shorter than the original",
+   c_num: "All numbers kept", c_num_bad: (l) => `Number missing from the short version: ${l}`,
+   c_len: (n) => `Sentences short enough (longest: ${n} words)`, c_len_bad: (n) => `One sentence is long (${n} words)`,
+   verdict_ok: "Review: all good", verdict_hint: "Review: with remarks", signed: (w) => `Result signed by ${w}, signature verified`,
+   fin: (p, b) => `Done: ${p} of ${b} credits.`, fin2: (w, t) => `Winners' compute time ${w} ms, total ${t} ms.`,
+   e_budget: (n, b) => `Not possible with ${b} credits: the cheapest pair costs ${n}.`, e_unfilled: (r) => `Nobody is bidding for "${r}" right now.`,
+   e_busy: "Busy right now. Please try again in a moment.", e_net: "Connection lost.", e_exec: (w) => `${w} could not deliver.`, e_sig: (w) => `Signature from ${w} invalid, result discarded.`,
+   real: "How real is this?",
+   real_body: "Each provider is its own process with its own key and signs its bid. CADS-Tunnel decides the winner (ct_common::pipeline, auction_view). Only what the algorithm knows is weighed: price, round robin, or past jobs. The winner really does the job and signs the result. The short pause between cards is display only.",
+   sample: "By 2030 the city will build 1200 new apartments at the harbour. The apartments should also be open to people with low incomes. Yesterday the weather was lovely and many people went for a walk. The city is investing 45 million euros in the apartments. One third of the apartments will receive social funding."
   }
+ };
+ const $ = (s) => document.querySelector(s);
+ const out = $("#out"), form = $("#form"), go = $("#go"), ta = $("#text");
+ let lang = (localStorageGet("lang") || (navigator.language || "de")).slice(0, 2) === "en" ? "en" : "de";
+ let sampleShown = true, rosterState = null;
+ function localStorageGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
+ function localStorageSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
+ const t = (k, ...a) => { const v = T[lang][k]; return typeof v === "function" ? v(...a) : v; };
 
-  const lanes = { reviewer: makeLane("stage-reviewer", "reviewer"), writer: makeLane("stage-writer", "writer") };
+ function h(tag, props, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) { if (k === "class") e.className = v; else e.setAttribute(k, v); }
+  for (const c of kids.flat()) if (c != null) e.append(c.nodeType ? c : document.createTextNode(String(c)));
+  return e;
+ }
+ const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
-  function renderBoard(offers) {
-    for (const role of ["reviewer", "writer"]) {
-      const rows = offers.filter((o) => o.role === role);
-      lanes[role].setBidders(rows);
-      const foot = document.getElementById("foot-" + role);
-      foot.textContent = rows.length ? rows.length + " real bidder" + (rows.length === 1 ? "" : "s") + " online" : "waiting for real bidders…";
+ function applyLang() {
+  document.documentElement.lang = lang;
+  document.querySelectorAll("[data-t]").forEach((e) => { e.textContent = t(e.dataset.t); });
+  document.querySelectorAll(".lang button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.l === lang)));
+  if (sampleShown) ta.value = t("sample");
+  go.textContent = t(go.disabled ? "going" : "go");
+  renderRoster();
+ }
+ document.querySelector(".lang").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  lang = b.dataset.l; localStorageSet("lang", lang); applyLang();
+ });
+ ta.addEventListener("input", () => { sampleShown = false; });
+
+ function renderRoster() {
+  const chip = $("#chip");
+  if (!rosterState) { $("#chip-t").textContent = ""; return; }
+  chip.classList.toggle("up", rosterState.up > 0);
+  $("#chip-t").textContent = rosterState.up > 0 ? t("online", rosterState.up, rosterState.total) : t("offline");
+ }
+ async function loadRoster() {
+  try { rosterState = await (await fetch("/roster")).json(); } catch { rosterState = null; }
+  renderRoster();
+ }
+
+ // ---- run one tender ----
+ const sleep = (ms) => new Promise((r) => setTimeout(r, matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : ms));
+ let steps, finalEl, notes;
+
+ function stepEl(role, n) {
+  const list = h("ul", { class: "bids" });
+  const why = h("p", { class: "why" });
+  const exec = h("div", { class: "exec", hidden: "" });
+  const el = h("section", { class: "step", "aria-labelledby": "h-" + role }, h("h2", { id: "h-" + role }, `${n} · ${t("step_" + role)}`), list, why, exec);
+  out.append(el);
+  return { role, el, list, why, exec, items: new Map(), max: 0 };
+ }
+ function setBar(item, price, max) { item.querySelector(".bar i").style.width = Math.max(6, Math.round((price / max) * 100)) + "%"; }
+
+ async function onEvent(m) {
+  switch (m.type) {
+   case "tender": break;
+   case "bid": {
+    const s = steps[m.role]; if (!s) break;
+    s.max = Math.max(s.max, m.price, 1);
+    const item = h("li", { class: "bid" },
+     h("div", { class: "l1" }, h("b", {}, cap(m.who)), h("span", {}, `${m.price} ${t("cr")}`)),
+     h("div", { class: "bar", "aria-hidden": "true" }, h("i")),
+     h("div", { class: "meta" }, `${t("done_n", m.jobs_done)} · ${m.ms} ms`));
+    s.list.append(item); s.items.set(m.who, { item, price: m.price });
+    await sleep(40); item.classList.add("in");
+    for (const v of s.items.values()) setBar(v.item, v.price, s.max);
+    await sleep(160); break;
+   }
+   case "no_bid": {
+    notes.append(h("p", { class: "nobid" }, t("nobid", cap(m.who), m.reason))); break;
+   }
+   case "over_budget": {
+    const e = steps[m.role].items.get(m.who);
+    if (e) { e.item.classList.add("out"); e.item.querySelector(".meta").textContent = t("over"); }
+    break;
+   }
+   case "cleared": {
+    const s = steps[m.role]; const w = m.bids.find((b) => b.win);
+    for (const b of m.bids) {
+      const e = s.items.get(b.who); if (!e) continue;
+      e.item.classList.add(b.win ? "win" : "lose");
+      if (b.win) { e.item.querySelector(".l1 b").after(h("span", { class: "badge" }, " ✓ " + t("win"))); }
     }
-  }
-
-  function refreshBoard() {
-    fetch("/offers").then((r) => r.json()).then(renderBoard).catch(() => {});
-  }
-
-  document.getElementById("mine-submit").addEventListener("click", async () => {
-    const row = document.getElementById("mine-row");
-    const who = row.querySelector(".f-who").value.trim();
-    if (!who) { statusEl.textContent = "enter a name for your bid first"; return; }
-    const body = {
-      role: row.querySelector(".f-role").value,
-      who,
-      units: Math.max(1, parseInt(row.querySelector(".f-units").value, 10) || 1),
-      price: Math.max(0, parseInt(row.querySelector(".f-price").value, 10) || 0),
-    };
-    statusEl.textContent = "signing and submitting your bid…";
-    const resp = await fetch("/offers/mine", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    statusEl.textContent = resp.ok ? "your bid is on the board." : "rejected: " + (await resp.text());
-  });
-
-  document.getElementById("reset-btn").addEventListener("click", async () => {
-    statusEl.textContent = "clearing the board…";
-    await fetch("/reset", { method: "POST" });
-  });
-
-  document.getElementById("run-btn").addEventListener("click", async () => {
-    statusEl.textContent = "running…";
-    lanes.reviewer.clearWinner(); lanes.writer.clearWinner();
-    await fetch("/run?policy=" + encodeURIComponent(policy), { method: "POST" });
-  });
-
-  refreshBoard();
-
-  const es = new EventSource("/events");
-  es.onmessage = (ev) => {
-    let msg;
-    try { msg = JSON.parse(ev.data); } catch { return; }
-    switch (msg.type) {
-      case "round_start":
-        statusEl.textContent = `round started (policy: ${msg.policy})`;
-        break;
-      case "bid":
-        statusEl.textContent = `bid seen: ${msg.who} (${msg.role})`;
-        if (lanes[msg.role]) lanes[msg.role].pulseTo(msg.who);
-        break;
-      case "role_cleared": {
-        const winnerBid = msg.bids.find((b) => b.win);
-        if (lanes[msg.role]) lanes[msg.role].setWinner(winnerBid ? winnerBid.who : null);
-        statusEl.textContent = `${msg.role} cleared` + (winnerBid ? `: ${winnerBid.who} wins` : "");
-        break;
-      }
-      case "round_done":
-        statusEl.textContent = "round complete";
-        break;
-      case "round_error":
-        statusEl.textContent = "error: " + msg.message;
-        break;
-      case "reset":
-        statusEl.textContent = "board cleared — real providers resubmit on their own schedule";
-        lanes.reviewer.clearWinner(); lanes.writer.clearWinner();
-        refreshBoard();
-        break;
-      case "offer_submitted":
-        // A real provider process (or your own bid) just registered -- keep the board in sync.
-        refreshBoard();
-        break;
+    const W = cap(w.who), r = m.why;
+    const nx = r.next ? { who: cap(r.next.who), price: r.next.price } : null;
+    s.why.textContent = r.kind === "round_robin" ? t("w_round_robin", W, r.previous && cap(r.previous))
+      : r.kind === "least_calls" ? t("w_least_calls", W, r.jobs) : t("w_lowest_floor", W, w.price, nx);
+    await sleep(500); break;
+   }
+   case "exec_start": {
+    const s = steps[m.role]; s.exec.hidden = false; s.exec.textContent = t("works", cap(m.who)); await sleep(300); break;
+   }
+   case "exec_done": {
+    const s = steps[m.role], o = m.output; s.exec.textContent = "";
+    if (m.role === "writer") {
+     s.exec.append(h("strong", {}, t("summary")), h("blockquote", {}, o.summary), h("div", { class: "meta" }, t("words", o.words_in, o.words_out)));
+    } else {
+     const li = (ok, good, bad) => h("li", {}, h("span", { class: ok ? "ok" : "hint", "aria-hidden": "true" }, ok ? "✓ " : "! "), ok ? good : bad);
+     s.exec.append(h("strong", {}, t(o.verdict === "ok" ? "verdict_ok" : "verdict_hint")), h("ul", { class: "checks" },
+      li(o.shorter_ok, t("c_short", o.reduction_pct), t("c_short_bad")),
+      li(o.numbers_ok, t("c_num"), t("c_num_bad", o.missing_numbers.join(", "))),
+      li(o.sentence_length_ok, t("c_len", o.longest_sentence_words), t("c_len_bad", o.longest_sentence_words))));
     }
-  };
-  es.onerror = () => { statusEl.textContent = "reconnecting…"; };
+    s.exec.append(h("div", { class: "sig" }, "🔏 " + t("signed", cap(m.who)))); await sleep(300); break;
+   }
+   case "done":
+    finalEl = h("section", { class: "final" }, h("p", {}, h("strong", {}, t("fin", m.total_price, m.budget))), h("p", { class: "meta" }, t("fin2", m.work_ms, m.total_ms)));
+    out.append(finalEl); break;
+   case "error": {
+    const msg = m.code === "budget" ? t("e_budget", m.need, m.budget) : m.code === "unfilled" ? t("e_unfilled", m.role ? t("step_" + m.role) : "") : m.code === "bad_signature" ? t("e_sig", cap(m.who)) : t("e_exec", cap(m.who || ""));
+    out.append(h("p", { class: "err", role: "alert" }, msg)); break;
+   }
+  }
+ }
+
+ form.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  go.disabled = true; go.textContent = t("going"); out.textContent = "";
+  steps = { writer: stepEl("writer", 1), reviewer: stepEl("reviewer", 2) };
+  notes = h("div", {}); out.append(notes);
+  steps.writer.why.textContent = t("asking");
+  const body = { text: ta.value, budget: parseInt($("#budget").value, 10) || 0, policy: form.elements.policy.value };
+  try {
+   const r = await fetch("/tender", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+   if (!r.ok) { out.textContent = ""; out.append(h("p", { class: "err", role: "alert" }, r.status === 429 ? t("e_busy") : await r.text())); return; }
+   steps.writer.why.textContent = "";
+   const reader = r.body.getReader(), dec = new TextDecoder(); let buf = "", queue = Promise.resolve();
+   for (;;) {
+    const { done, value } = await reader.read(); if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i; while ((i = buf.indexOf("\n\n")) >= 0) {
+     const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
+     const line = chunk.split("\n").find((l) => l.startsWith("data:")); if (!line) continue;
+     let m; try { m = JSON.parse(line.slice(5)); } catch { continue; }
+     queue = queue.then(() => onEvent(m)); // display in arrival order, with a short pause
+    }
+   }
+   await queue;
+  } catch { out.append(h("p", { class: "err", role: "alert" }, t("e_net"))); }
+  finally { go.disabled = false; go.textContent = t("go"); loadRoster(); }
+ });
+
+ applyLang(); loadRoster(); setInterval(() => { if (!go.disabled && !document.hidden) loadRoster(); }, 30000);
 })();
 </script>
 </body>
