@@ -10,65 +10,46 @@ processes. It's the honest replacement pattern issue
 demonstrated end to end in a fresh, isolated demo rather than by modifying
 flappy-demo's production bridge.
 
-## What's real, what's simulated
+## What a visitor does
 
-- **Real**: every bidder is its own genuinely independent OS process
-  (`auction-demo-provider`, `src/bin/provider.rs` — one container per named provider
-  in `compose.auction-demo.yml`), holding its own randomly-generated ed25519
-  identity, signing its own real `ct_common::channel::CapacityOffer`, and submitting
-  it to the bridge's `POST /offers/submit` — which verifies the signature
-  (`CapacityOffer::is_valid`) rather than trusting or fabricating it. The auction
-  algorithm (`convene_with_policy`/`auction_view`), the `SelectionPolicy` variants,
-  and the winner it computes are all real, running live on exactly those verified
-  offers — switching policy visibly changes the outcome. A visitor can add one bid of
-  their own too (`POST /offers/mine`).
-- **Simulated**: nothing about the bidders, their identities, their signatures, or
-  the clearing computation — the only thing generated per round is a visitor's own
-  optional bid, same as everywhere else on these demos. Each bid also appears with a
-  short deliberate pause during a round so a human can watch it happen — the real
-  computation itself is effectively instant.
+One input (a text and a budget), one button: **Auftrag ausschreiben**. The bridge then runs
+one real tender, streamed (`POST /tender`, SSE) to that visitor only:
+
+1. it asks all six provider processes live for a signed `CapacityOffer` (bids appear in
+   arrival order, with the measured answer time);
+2. it verifies each offer (`CapacityOffer::is_valid`) and drops bids that cannot be part of
+   any plan within the budget (shown as "over budget");
+3. `PipelineSpec::auction_view` clears the two-role pipeline (writer, reviewer) with the
+   chosen `SelectionPolicy` (lowest floor, round robin, least calls);
+4. the winners really do the work (extractive summary, then a review report against the
+   original) and sign the result; the bridge verifies the signature against the winner's
+   key from its offer.
+
+## What's real, what's not
+
+- **Real**: six independent processes (`src/bin/provider.rs`), each with its own random
+  ed25519 key, signing its own offers and results; the clearing algorithm and its winner;
+  the measured timings; the work itself. The one-line "why" is derived from the data the
+  algorithm actually used (price vs. runner-up, rotation, jobs so far). No latency or
+  reputation weights are shown because the algorithm has none.
+- **Not real**: the work is deterministic text processing, not an LLM. The short pause
+  between cards in the browser is display pacing only. Offers are requested on demand by
+  the bridge (a request for quote) instead of being published to a plane.
 
 ## Running it locally
 
 ```
-docker compose -f compose.auction-demo.yml --env-file .env up --build -d \
-  auction-demo-bridge auction-demo-provider-aurora auction-demo-provider-borealis \
-  auction-demo-provider-cascade auction-demo-provider-delta auction-demo-provider-echo \
-  auction-demo-provider-foxtrot
+cargo build --bins
+# six providers (PROVIDER_NAME, PROVIDER_ROLE=writer|reviewer, PROVIDER_UNITS, PROVIDER_PRICE,
+# PROVIDER_LISTEN) and the bridge (AUCTION_PROVIDERS=comma-separated provider URLs)
 ```
-then open `http://127.0.0.1:8789/`, watch the six real bidders populate the board
-over SSE, pick a policy, and click **Run auction round**. `docker compose up
-<one-service>` does **not** work against this compose file (Compose interpolates
-every service's required env vars up front — including `AUCTION_CERT_DIR` and the
-Browser-Plane agent's vars — so it fails before a single-service `up` even starts,
-live-verified) — bring up the bridge + providers together, or all services for the
-full public path.
-
-## Verifying the wiring without a browser
+or `docker compose -f compose.auction-demo.selfservice.yml --env-file .env.selfservice up --build -d`.
+Providers are reachable only on the compose network (`expose`, no host ports).
 
 ```
-curl -N http://127.0.0.1:8789/events &
-curl http://127.0.0.1:8789/offers   # real offers from the six real provider containers
-curl -X POST 'http://127.0.0.1:8789/run?policy=lowest_floor'
-```
-
-Real output from the actual rework verification pass — six independently-signed
-offers, a correct `lowest_floor` clear (borealis at 45 beats cascade at 55 and
-aurora at 60; foxtrot at 22 beats delta at 30 and echo at 38):
-
-```
-data: {"type":"round_start","policy":"lowest_floor"}
-data: {"type":"bid","role":"reviewer","who":"borealis","units":12,"price":45}
-...
-data: {"type":"role_cleared","role":"reviewer","bids":[
-  {"who":"borealis","units":12,"price":45,"win":true},
-  {"who":"cascade","units":20,"price":55,"win":false},
-  {"who":"aurora","units":15,"price":60,"win":false}]}
-data: {"type":"role_cleared","role":"writer","bids":[
-  {"who":"foxtrot","units":28,"price":22,"win":true},
-  {"who":"delta","units":25,"price":30,"win":false},
-  {"who":"echo","units":30,"price":38,"win":false}]}
-data: {"type":"round_done"}
+curl -N -X POST localhost:8789/tender -H 'content-type: application/json' \
+  -d '{"text":"Die Stadt baut 1200 Wohnungen. ...","budget":100,"policy":"lowest_floor"}'
+curl localhost:8789/roster   # live health of the providers
 ```
 
 ## Hermetic build/test
@@ -141,13 +122,12 @@ can be taken down.
 
 ## Layout
 
-- `src/main.rs` — the bridge: verifies real submitted `CapacityOffer`s
-  (`POST /offers/submit`), accepts a visitor's own bid (`POST /offers/mine`), runs
-  the real `ct_common::pipeline` auction logic, an SSE `/events` stream,
-  `POST /run`/`POST /reset`, and serves the static dashboard.
+- `src/main.rs` — the bridge: `POST /tender` (SSE per visitor, max 4 concurrent), `GET /roster`,
+  and the page.
+- `src/lib.rs` — the real work functions and the signed-result format shared with providers.
 - `src/bin/provider.rs` — `auction-demo-provider`: a genuinely independent bidder
-  process. Generates its own real random ed25519 identity, signs its own real offer,
-  submits it periodically. Never shares a process, filesystem, or private key with
+  process. Generates its own real random ed25519 identity and serves `/quote` (signed offer),
+  `/job` (work + signed result) and `/health`. Never shares a process, filesystem, or private key with
   the bridge or any other provider.
 - `index.html` — the dashboard: a live, read-only bidder board (populated by real
   provider submissions over SSE) plus a small form to add your own bid. Vanilla
