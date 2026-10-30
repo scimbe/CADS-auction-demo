@@ -10,6 +10,28 @@ use std::collections::HashMap;
 pub const MAX_TEXT_CHARS: usize = 2000;
 const DOMAIN: &[u8] = b"cads-auction-demo-job-v1";
 
+const ABBREVIATIONS: &[&str] = &[
+    "bzw", "ca", "dr", "etc", "evtl", "ggf", "inkl", "mio", "mr", "mrd", "mrs", "ms", "nr", "prof", "st", "str", "tel", "usw", "vgl", "vs", "zb",
+];
+const MONTHS: &[&str] = &[
+    "januar", "februar", "märz", "april", "mai", "juni", "juli", "august", "september", "oktober", "november", "dezember",
+];
+
+/// Is the '.' at `i` part of an abbreviation or date ("Dr. Meier", "z. B.", "3. Oktober") instead
+/// of the end of a sentence?
+fn dot_continues_sentence(chars: &[char], i: usize) -> bool {
+    let start = chars[..i].iter().rposition(|c| !c.is_alphanumeric()).map_or(0, |p| p + 1);
+    let token: String = chars[start..i].iter().collect::<String>().to_lowercase();
+    let next: String = chars[i + 1..].iter().skip_while(|c| c.is_whitespace()).take_while(|c| c.is_alphabetic()).collect();
+    let next_lower = next.to_lowercase();
+    if next.chars().next().is_some_and(char::is_lowercase) {
+        return true;
+    }
+    let single_letter = token.chars().count() == 1 && token.chars().all(char::is_alphabetic);
+    let ordinal_date = !token.is_empty() && token.len() <= 2 && token.chars().all(|c| c.is_ascii_digit()) && MONTHS.contains(&next_lower.as_str());
+    single_letter || ordinal_date || ABBREVIATIONS.contains(&token.as_str())
+}
+
 /// Split into sentences on . ! ? followed by whitespace or end.
 pub fn sentences(text: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -17,7 +39,12 @@ pub fn sentences(text: &str) -> Vec<String> {
     let chars: Vec<char> = text.chars().collect();
     for (i, c) in chars.iter().enumerate() {
         cur.push(*c);
-        if matches!(c, '.' | '!' | '?') && chars.get(i + 1).map_or(true, |n| n.is_whitespace()) {
+        let ends = match c {
+            '!' | '?' => true,
+            '.' => !dot_continues_sentence(&chars, i),
+            _ => false,
+        };
+        if ends && chars.get(i + 1).map_or(true, |n| n.is_whitespace()) {
             let s = cur.trim().to_string();
             if !s.is_empty() {
                 out.push(s);
@@ -80,7 +107,9 @@ pub fn review(original: &str, summary: &str) -> Value {
     let win = words(original).len();
     let wout = words(summary).len();
     let reduction = if win == 0 { 0 } else { 100usize.saturating_sub(wout * 100 / win) };
-    let missing: Vec<String> = numbers(original).into_iter().filter(|n| !summary.contains(n.as_str())).collect();
+    // Whole numbers, not substrings: "20" is not kept just because the summary says "2030".
+    let kept = numbers(summary);
+    let missing: Vec<String> = numbers(original).into_iter().filter(|n| !kept.contains(n)).collect();
     let longest = sentences(summary).iter().map(|s| words(s).len()).max().unwrap_or(0);
     let shorter_ok = wout < win;
     let long_ok = longest <= 30;
@@ -167,6 +196,24 @@ mod tests {
         let miss = r["missing_numbers"].as_array().unwrap();
         assert!(miss.iter().any(|m| m == "2030") && miss.iter().any(|m| m == "45"));
         assert!(!miss.iter().any(|m| m == "1200"));
+    }
+
+    /// Live on 2026-10-30: the review said "all numbers kept" with the 20 from the original missing.
+    #[test]
+    fn a_number_is_not_kept_because_a_longer_one_contains_it() {
+        let r = review("Die Stadt baut 2030 neu. Kurz: 20 Tage.", "Die Stadt baut 2030 neu.");
+        assert_eq!(r["numbers_ok"], false);
+        assert_eq!(r["missing_numbers"], json!(["20"]));
+    }
+
+    /// Live on 2026-10-30: this text came back as "... Das Projekt kostet ca." with 10 "sentences".
+    #[test]
+    fn abbreviations_and_dates_do_not_end_a_sentence() {
+        let t = "Dr. Meier und Prof. Schulz leiten das Projekt z. B. am 3. Oktober in Hamburg. Das Projekt kostet 1.200 Euro. Es kostet ca. 3,5 Mio. Euro insgesamt.";
+        let s = sentences(t);
+        assert_eq!(s.len(), 3, "{s:?}");
+        assert!(s[2].ends_with("Euro insgesamt."));
+        assert_eq!(sentences("Der Bau endet 2030. Danach folgt mehr.").len(), 2, "a year ends a sentence");
     }
 
     #[test]

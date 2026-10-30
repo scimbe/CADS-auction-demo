@@ -95,6 +95,7 @@ struct Bidder {
     url: String,
     role: String,
     offer: CapacityOffer,
+    jobs_done: u64,
 }
 
 #[derive(Deserialize)]
@@ -145,6 +146,53 @@ fn why(policy: &str, bids: &[ct_common::pipeline::RoleBidView], before: &Selecti
     }
 }
 
+struct ClearedRole {
+    view: ct_common::pipeline::RoleAuctionView,
+    /// Bids of this role the budget left out: (name, price).
+    over_budget: Vec<(String, u64)>,
+}
+
+/// Clears the roles in order, so the budget binds the actual winners and not just the cheapest
+/// possible plan: each role only sees bids that leave enough for the cheapest bid of every later
+/// role, given what the earlier roles' winners really cost. Filtering every role once against the
+/// other roles' minimum let round robin pick 38 + 60 = 98 on a budget of 90.
+fn clear_within_budget(
+    spec: &PipelineSpec,
+    bidders: &[Bidder],
+    budget: u64,
+    now: u64,
+    policy: SelectionPolicy,
+    state: &mut SelectionState,
+    names: &HashMap<[u8; 32], String>,
+) -> Result<Vec<ClearedRole>, String> {
+    let mut out = Vec::new();
+    let mut remaining = budget;
+    for (i, role) in spec.roles.iter().enumerate() {
+        let min_of_later: u64 = spec.roles[i + 1..]
+            .iter()
+            .filter_map(|r| bidders.iter().filter(|x| x.role == r.tag).map(|x| x.offer.min_price).min())
+            .sum();
+        let (mut offers, mut over_budget) = (Vec::new(), Vec::new());
+        for x in bidders.iter().filter(|x| x.role == role.tag) {
+            if x.offer.min_price + min_of_later <= remaining {
+                offers.push(x.offer.clone());
+            } else {
+                over_budget.push((x.name.clone(), x.offer.min_price));
+            }
+        }
+        let one_role = PipelineSpec { roles: vec![role.clone()], ..spec.clone() };
+        let labels = names.clone();
+        let mut views = one_role
+            .auction_view(&offers, now, policy, state, move |pk| labels.get(pk).cloned().unwrap_or_else(|| "unknown".into()))
+            .map_err(|e| e.to_string())?;
+        let view = views.pop().ok_or("no view")?;
+        let price = view.bids.iter().find(|b| b.win).map(|b| b.price).ok_or("no winner")?;
+        remaining = remaining.saturating_sub(price);
+        out.push(ClearedRole { view, over_budget });
+    }
+    Ok(out)
+}
+
 async fn run_tender(b: Arc<Bridge>, req: TenderReq, policy_name: String, policy: SelectionPolicy, tx: Tx) -> Option<()> {
     let t_start = Instant::now();
     let now = now_secs();
@@ -169,7 +217,7 @@ async fn run_tender(b: Arc<Bridge>, req: TenderReq, policy_name: String, policy:
                     continue;
                 }
                 emit(&tx, json!({"type": "bid", "role": q.role, "who": q.display_name, "price": q.offer.min_price, "units": q.offer.units_available, "jobs_done": q.jobs_done, "ms": (ms * 10.0).round() / 10.0, "key": &hex(&q.offer.holder_pubkey)[..8]})).await?;
-                bidders.push(Bidder { name: q.display_name, url, role: q.role, offer: q.offer });
+                bidders.push(Bidder { name: q.display_name, url, role: q.role, offer: q.offer, jobs_done: q.jobs_done });
             }
             Err(reason) => {
                 emit(&tx, json!({"type": "no_bid", "who": name, "reason": reason})).await?;
@@ -177,7 +225,7 @@ async fn run_tender(b: Arc<Bridge>, req: TenderReq, policy_name: String, policy:
         }
     }
 
-    // 2. budget: drop bids that cannot be part of ANY plan within the visitor's total budget.
+    // 2.+3. budget and the real clear, role by role.
     let min_of = |role: &str| bidders.iter().filter(|x| x.role == role).map(|x| x.offer.min_price).min();
     let (Some(min_w), Some(min_r)) = (min_of("writer"), min_of("reviewer")) else {
         let role = if min_of("writer").is_none() { "writer" } else { "reviewer" };
@@ -186,37 +234,40 @@ async fn run_tender(b: Arc<Bridge>, req: TenderReq, policy_name: String, policy:
     if min_w + min_r > req.budget {
         return emit(&tx, json!({"type": "error", "code": "budget", "need": min_w + min_r, "budget": req.budget})).await;
     }
-    let mut offers = Vec::new();
-    for x in &bidders {
-        let other_min = if x.role == "writer" { min_r } else { min_w };
-        if x.offer.min_price + other_min > req.budget {
-            emit(&tx, json!({"type": "over_budget", "role": x.role, "who": x.name, "price": x.offer.min_price})).await?;
-        } else {
-            offers.push(x.offer.clone());
-        }
-    }
-
-    // 3. the real clear.
     let name_by_pk: HashMap<[u8; 32], String> = bidders.iter().map(|x| (x.offer.holder_pubkey, x.name.clone())).collect();
     let pk_by_name: HashMap<String, [u8; 32]> = bidders.iter().map(|x| (x.name.clone(), x.offer.holder_pubkey)).collect();
-    let (before, result) = {
+    let (before, cleared) = {
         let mut state = b.selection.lock().unwrap_or_else(|e| e.into_inner());
+        if matches!(policy, SelectionPolicy::LeastCalls) {
+            // "Fewest jobs" must mean the jobs shown on the bid cards. `served_counts` alone only
+            // ever counts wins under this one policy, so a provider with 7 done jobs would read 0.
+            for x in &bidders {
+                state.served_counts.insert(x.offer.holder_pubkey, x.jobs_done);
+            }
+        }
         let before = state.clone();
-        let labels = name_by_pk.clone();
-        let r = b.spec.auction_view(&offers, now, policy, &mut state, move |pk| labels.get(pk).cloned().unwrap_or_else(|| "unknown".into()));
+        let r = clear_within_budget(&b.spec, &bidders, req.budget, now, policy, &mut state, &name_by_pk);
         (before, r)
     };
-    let views = match result {
-        Ok(v) => v,
-        Err(e) => return emit(&tx, json!({"type": "error", "code": "unfilled", "message": e.to_string()})).await,
+    let cleared = match cleared {
+        Ok(c) => c,
+        Err(e) => return emit(&tx, json!({"type": "error", "code": "unfilled", "message": e})).await,
     };
     let mut winners: Vec<(String, String, String)> = Vec::new(); // (role, winner name, url)
     let mut total_price = 0u64;
-    for v in &views {
+    for c in &cleared {
+        for (who, price) in &c.over_budget {
+            emit(&tx, json!({"type": "over_budget", "role": c.view.role, "who": who, "price": price})).await?;
+        }
+        let v = &c.view;
         let reason = why(&policy_name, &v.bids, &before, &v.role, &pk_by_name, &name_by_pk);
-        let w = v.bids.iter().find(|x| x.win)?;
+        let Some(w) = v.bids.iter().find(|x| x.win) else {
+            return emit(&tx, json!({"type": "error", "code": "unfilled", "role": v.role})).await;
+        };
+        let Some(url) = bidders.iter().find(|x| x.name == w.who).map(|x| x.url.clone()) else {
+            return emit(&tx, json!({"type": "error", "code": "unfilled", "role": v.role})).await;
+        };
         total_price += w.price;
-        let url = bidders.iter().find(|x| x.name == w.who)?.url.clone();
         winners.push((v.role.clone(), w.who.clone(), url));
         emit(&tx, json!({"type": "cleared", "role": v.role, "why": reason, "bids": v.bids.iter().map(|x| json!({"who": x.who, "price": x.price, "units": x.units, "win": x.win})).collect::<Vec<_>>()})).await?;
     }
@@ -240,8 +291,8 @@ async fn run_tender(b: Arc<Bridge>, req: TenderReq, policy_name: String, policy:
         .await;
         match out {
             Ok((jr, rtt)) => {
-                let pk = bidders.iter().find(|x| x.url == *url).map(|x| x.offer.holder_pubkey)?;
-                let sig_ok = verify_result(&pk, &job_id, role, &jr.output, &jr.sig_hex);
+                let pk = bidders.iter().find(|x| x.url == *url).map(|x| x.offer.holder_pubkey);
+                let sig_ok = pk.is_some_and(|pk| verify_result(&pk, &job_id, role, &jr.output, &jr.sig_hex));
                 if !sig_ok {
                     return emit(&tx, json!({"type": "error", "code": "bad_signature", "role": role, "who": who})).await;
                 }
@@ -385,6 +436,55 @@ mod tests {
         let reviewer = views.iter().find(|v| v.role == "reviewer").expect("reviewer role present");
         let winner = reviewer.bids.iter().find(|b| b.win).expect("a winner exists");
         assert_eq!(winner.who, "borealis", "lowest floor among {{45, 60}} must win");
+    }
+
+    fn bidder(name: &str, role: &str, price: u64, jobs: u64, now: u64) -> Bidder {
+        Bidder { name: name.into(), url: format!("http://{name}"), role: role.into(), offer: real_offer(name, role, 30, price, now), jobs_done: jobs }
+    }
+
+    fn live_roster(now: u64) -> Vec<Bidder> {
+        vec![
+            bidder("foxtrot", "writer", 22, 0, now), bidder("delta", "writer", 30, 0, now), bidder("echo", "writer", 38, 0, now),
+            bidder("borealis", "reviewer", 45, 0, now), bidder("cascade", "reviewer", 55, 0, now), bidder("aurora", "reviewer", 60, 0, now),
+        ]
+    }
+
+    fn total(c: &[ClearedRole]) -> u64 {
+        c.iter().map(|r| r.view.bids.iter().find(|b| b.win).unwrap().price).sum()
+    }
+
+    /// Live on 2026-10-30: budget 90, round robin, three of seven rounds ended "98 of 90 credits".
+    #[test]
+    fn winners_never_exceed_the_budget_under_any_policy() {
+        let now = now_secs();
+        let spec = demo_spec();
+        let bidders = live_roster(now);
+        let names: HashMap<_, _> = bidders.iter().map(|x| (x.offer.holder_pubkey, x.name.clone())).collect();
+        for policy in [SelectionPolicy::RoundRobin, SelectionPolicy::LeastCalls, SelectionPolicy::LowestFloor] {
+            let mut state = SelectionState::default();
+            for budget in 67..=120 {
+                for _ in 0..7 {
+                    let c = clear_within_budget(&spec, &bidders, budget, now, policy, &mut state, &names).expect("clears");
+                    assert!(total(&c) <= budget, "{policy:?}: {} > {budget}", total(&c));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_bid_the_winner_left_unaffordable_is_reported_as_over_budget() {
+        let now = now_secs();
+        let bidders = live_roster(now);
+        let names: HashMap<_, _> = bidders.iter().map(|x| (x.offer.holder_pubkey, x.name.clone())).collect();
+        let mut state = SelectionState::default();
+        let c = clear_within_budget(&demo_spec(), &bidders, 70, now, SelectionPolicy::LowestFloor, &mut state, &names).unwrap();
+        assert!(c[0].over_budget.iter().any(|(n, _)| n == "echo"), "38 + 45 > 70");
+        assert!(c[1].over_budget.iter().any(|(n, _)| n == "aurora"), "22 + 60 > 70");
+    }
+
+    #[test]
+    fn page_reports_a_stream_that_ends_without_a_result() {
+        assert!(INDEX_HTML.contains("e_cut"), "a tender that ends with neither done nor error must not end silently");
     }
 
     #[test]
