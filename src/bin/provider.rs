@@ -59,7 +59,7 @@ async fn quote(State(p): State<Arc<Provider>>) -> Json<Value> {
     let offer = CapacityOffer::sign_new_with_services(
         &p.key,
         CapacityKind::CloudApiQuota,
-        vec!["claude".into()],
+        vec!["extractive-text".into()], // the work really is deterministic text processing, no model
         p.units,
         p.price,
         "demo-credits".into(),

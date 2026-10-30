@@ -118,7 +118,7 @@
    verdict_ok: "Prüfbericht: in Ordnung", verdict_hint: "Prüfbericht: mit Hinweisen", signed: (w) => `Ergebnis von ${w} signiert, Signatur geprüft`,
    fin: (p, b) => `Fertig: ${p} von ${b} Credits.`, fin2: (w, t) => `Rechenzeit der Gewinner ${w} ms, gesamt ${t} ms.`,
    e_budget: (n, b) => `Mit ${b} Credits geht es nicht: das günstigste Gespann kostet ${n}.`, e_unfilled: (r) => `Für „${r}“ hat gerade niemand geboten.`,
-   e_busy: "Gerade ist viel los. Bitte gleich noch einmal.", e_net: "Verbindung unterbrochen.", e_exec: (w) => `${w} konnte nicht liefern.`, e_sig: (w) => `Signatur von ${w} ungültig, Ergebnis verworfen.`,
+   e_busy: "Gerade ist viel los. Bitte gleich noch einmal.", e_net: "Verbindung unterbrochen.", e_cut: "Die Ausschreibung endete ohne Ergebnis.", e_exec: (w) => `${w} konnte nicht liefern.`, e_sig: (w) => `Signatur von ${w} ungültig, Ergebnis verworfen.`,
    real: "Wie echt ist das?",
    real_body: "Jeder Anbieter ist ein eigener Prozess mit eigenem Schlüssel und signiert sein Gebot. Den Gewinner bestimmt CADS-Tunnel (ct_common::pipeline, auction_view). Gewichtet wird nur, was der Algorithmus kennt: Preis, Reihum oder bisherige Aufträge. Der Gewinner führt den Auftrag wirklich aus und signiert das Ergebnis. Die kurze Pause zwischen den Karten ist nur Anzeige.",
    sample: "Die Stadt baut bis 2030 am Hafen 1200 neue Wohnungen. Die Wohnungen sollen auch Menschen mit kleinem Einkommen offenstehen. Gestern war das Wetter schön und viele Menschen gingen spazieren. Für die Wohnungen investiert die Stadt 45 Millionen Euro. Ein Drittel der Wohnungen soll sozial gefördert werden."
@@ -141,7 +141,7 @@
    verdict_ok: "Review: all good", verdict_hint: "Review: with remarks", signed: (w) => `Result signed by ${w}, signature verified`,
    fin: (p, b) => `Done: ${p} of ${b} credits.`, fin2: (w, t) => `Winners' compute time ${w} ms, total ${t} ms.`,
    e_budget: (n, b) => `Not possible with ${b} credits: the cheapest pair costs ${n}.`, e_unfilled: (r) => `Nobody is bidding for "${r}" right now.`,
-   e_busy: "Busy right now. Please try again in a moment.", e_net: "Connection lost.", e_exec: (w) => `${w} could not deliver.`, e_sig: (w) => `Signature from ${w} invalid, result discarded.`,
+   e_busy: "Busy right now. Please try again in a moment.", e_net: "Connection lost.", e_cut: "The tender ended without a result.", e_exec: (w) => `${w} could not deliver.`, e_sig: (w) => `Signature from ${w} invalid, result discarded.`,
    real: "How real is this?",
    real_body: "Each provider is its own process with its own key and signs its bid. CADS-Tunnel decides the winner (ct_common::pipeline, auction_view). Only what the algorithm knows is weighed: price, round robin, or past jobs. The winner really does the job and signs the result. The short pause between cards is display only.",
    sample: "By 2030 the city will build 1200 new apartments at the harbour. The apartments should also be open to people with low incomes. Yesterday the weather was lovely and many people went for a walk. The city is investing 45 million euros in the apartments. One third of the apartments will receive social funding."
@@ -179,12 +179,12 @@
 
  function renderRoster() {
   const chip = $("#chip");
-  if (!rosterState) { $("#chip-t").textContent = ""; return; }
+  if (!rosterState) { chip.classList.remove("up"); $("#chip-t").textContent = t("offline"); return; }
   chip.classList.toggle("up", rosterState.up > 0);
   $("#chip-t").textContent = rosterState.up > 0 ? t("online", rosterState.up, rosterState.total) : t("offline");
  }
  async function loadRoster() {
-  try { rosterState = await (await fetch("/roster")).json(); } catch { rosterState = null; }
+  try { const r = await fetch("/roster"); if (!r.ok) throw 0; rosterState = await r.json(); } catch { rosterState = null; }
   renderRoster();
  }
 
@@ -270,6 +270,7 @@
   steps = { writer: stepEl("writer", 1), reviewer: stepEl("reviewer", 2) };
   notes = h("div", {}); out.append(notes);
   steps.writer.why.textContent = t("asking");
+  let finished = false;
   const body = { text: ta.value, budget: parseInt($("#budget").value, 10) || 0, policy: form.elements.policy.value };
   try {
    const r = await fetch("/tender", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -283,10 +284,12 @@
      const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
      const line = chunk.split("\n").find((l) => l.startsWith("data:")); if (!line) continue;
      let m; try { m = JSON.parse(line.slice(5)); } catch { continue; }
+     if (m.type === "done" || m.type === "error") finished = true;
      queue = queue.then(() => onEvent(m)); // display in arrival order, with a short pause
     }
    }
    await queue;
+   if (!finished) out.append(h("p", { class: "err", role: "alert" }, t("e_cut")));
   } catch { out.append(h("p", { class: "err", role: "alert" }, t("e_net"))); }
   finally { go.disabled = false; go.textContent = t("go"); loadRoster(); }
  });
